@@ -1,0 +1,13 @@
+Clinician: What brought you in today?
+
+Patient: I have had a dry cough and mild shortness of breath for about five days. It is worse at night. I have not had a fever, chest pain, or coughing up blood.
+
+Clinician: Any relevant medical history or medications?
+
+Patient: I have mild asthma. I use an albuterol inhaler as needed. This week I used it twice, and it helped. I do not have any medication allergies that I know of.
+
+Clinician: Your temperature is 98.4 degrees Fahrenheit, oxygen saturation is 98 percent on room air, and your lungs are clear without wheezing. This sounds most consistent with a viral upper respiratory infection, with mild asthma symptoms.
+
+Patient: What should I do?
+
+Clinician: Continue the albuterol inhaler as prescribed when needed, stay hydrated, and rest. Please return if you develop fever, worsening shortness of breath, chest pain, or if the cough lasts longer than two weeks. We will follow up as needed.

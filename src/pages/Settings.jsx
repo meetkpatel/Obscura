@@ -1,0 +1,518 @@
+// Page component for configuring application settings.
+import {
+    Box,
+    Text,
+    VStack,
+    useToast,
+    Button,
+    useDisclosure,
+} from "@chakra-ui/react";
+import { useState, useEffect, useCallback } from "react";
+import { settingsService } from "../utils/settings/settingsUtils";
+import UserSettingsPanel from "../components/settings/UserSettingsPanel";
+import ModelSettingsPanel from "../components/settings/ModelSettingsPanel";
+import PromptSettingsPanel from "../components/settings/PromptSettingsPanel";
+import LetterTemplatesPanel from "../components/settings/LetterTemplatesPanel";
+import SettingsActions from "../components/settings/SettingsActions";
+import { SPECIALTIES } from "../utils/constants/index.jsx";
+import TemplateSettingsPanel from "../components/settings/TemplateSettingsPanel";
+import ChatSettingsPanel from "../components/settings/ChatSettingsPanel";
+import { isChatEnabled } from "../utils/helpers/featureFlags";
+import { isHackathonMode } from "../utils/helpers/featureFlags";
+import { templateService } from "../utils/services/templateService";
+import LocalModelManagerModal from "../components/modals/LocalModelManagerModal";
+import { localModelApi } from "../utils/api/localModelApi";
+import { useDebounce } from "../utils/hooks/useDebounce";
+
+const HOSTED_DEMO_CONFIG = {
+    LLM_PROVIDER: "openai",
+    LLM_BASE_URL: "https://openrouter.ai/api",
+    PRIMARY_MODEL: "google/gemma-4-26b-a4b-it",
+    SECONDARY_MODEL: "google/gemma-4-26b-a4b-it",
+    WHISPER_BASE_URL: "https://api.groq.com/openai",
+    WHISPER_MODEL: "whisper-large-v3-turbo",
+};
+
+const Settings = () => {
+    const focusedDemo = isHackathonMode();
+    const [userSettings, setUserSettings] = useState({
+        name: "",
+        specialty: "",
+        quick_chat_1_title: "Critique my plan",
+        quick_chat_1_prompt: "Critique my plan",
+        quick_chat_2_title: "Any additional investigations",
+        quick_chat_2_prompt: "Any additional investigations",
+        quick_chat_3_title: "Any differentials to consider",
+        quick_chat_3_prompt: "Any differentials to consider",
+    });
+    const [prompts, setPrompts] = useState(null);
+    const [options, setOptions] = useState({
+        general: { num_ctx: 0 },
+        secondary: { num_ctx: 0 },
+        letter: { temperature: 0 },
+    });
+    const [templates, setTemplates] = useState({});
+    const [letterTemplates, setLetterTemplates] = useState([]);
+
+    const [config, setConfig] = useState(null);
+    const [coreLoading, setCoreLoading] = useState(true);
+    const [llmModelsLoading, setLlmModelsLoading] = useState(false);
+    const [whisperModelsLoading, setWhisperModelsLoading] = useState(false);
+    const [modelOptions, setModelOptions] = useState([]);
+    const [selectedLocalModel, setSelectedLocalModel] = useState("");
+    const [whisperModelOptions, setWhisperModelOptions] = useState([]);
+    const [whisperModelListAvailable, setWhisperModelListAvailable] =
+        useState(false);
+
+    const toast = useToast();
+    const [urlStatus, setUrlStatus] = useState({
+        whisper: false,
+        llm: false,
+    });
+    const localModelsDisclosure = useDisclosure();
+    const [modelManagerRefreshKey, setModelManagerRefreshKey] = useState(0);
+    const [collapseStates, setCollapseStates] = useState({
+        userSettings: false,
+        modelSettings: false,
+        promptSettings: true,
+        letterTemplates: true,
+        templates: true,
+        chatSettings: true,
+        localModels: true,
+    });
+    const fetchCoreSettings = useCallback(async () => {
+        try {
+            setCoreLoading(true);
+            const configData = await settingsService.fetchConfig();
+            setConfig(configData);
+
+            // Letter templates fetched here instead of a separate useEffect
+            const [letterResponse] = await Promise.all([
+                settingsService.fetchLetterTemplates().catch((error) => {
+                    console.error(
+                        "Failed to fetch letter templates:",
+                        error,
+                    );
+                    return { templates: [], default_template_id: null };
+                }),
+                settingsService.fetchPrompts(setPrompts),
+                // Only fetch model options if NOT using local models
+                configData?.LLM_PROVIDER !== "local"
+                    ? settingsService.fetchOptions(setOptions)
+                    : Promise.resolve(
+                          setOptions({
+                              general: { num_ctx: 0 },
+                              secondary: { num_ctx: 0 },
+                              letter: { temperature: 0 },
+                          }),
+                      ),
+                settingsService.fetchUserSettings(setUserSettings),
+                settingsService.fetchTemplates(setTemplates),
+            ]);
+
+            // Set letter templates from parallel fetch
+            if (letterResponse) {
+                setLetterTemplates(letterResponse.templates);
+                if (letterResponse.default_template_id !== null) {
+                    setUserSettings((prev) => ({
+                        ...prev,
+                        default_letter_template_id:
+                            letterResponse.default_template_id,
+                    }));
+                }
+            }
+
+            // Fetch and merge default template into user settings
+            const defaultTemplate = await templateService.getDefaultTemplate();
+            setUserSettings((prev) => ({
+                ...prev,
+                default_template: defaultTemplate.template_key,
+            }));
+        } catch (error) {
+            console.error("Error loading settings:", error);
+            toast({
+                title: "Error loading settings",
+                description: error.message,
+                status: "error",
+                duration: 3000,
+                isClosable: true,
+            });
+        } finally {
+            setCoreLoading(false);
+        }
+    }, [toast]);
+
+    useEffect(() => {
+        fetchCoreSettings();
+    }, [fetchCoreSettings]);
+
+    const debouncedWhisperUrl = useDebounce(config?.WHISPER_BASE_URL, 500);
+    const debouncedLlmBaseUrl = useDebounce(config?.LLM_BASE_URL, 500);
+    const debouncedLlmProvider = useDebounce(config?.LLM_PROVIDER, 500);
+
+    useEffect(() => {
+        const validateUrls = async () => {
+            if (debouncedWhisperUrl) {
+                const whisperValid = await settingsService.validateUrl(
+                    "whisper",
+                    debouncedWhisperUrl,
+                );
+                setUrlStatus((prev) => ({ ...prev, whisper: whisperValid }));
+            } else {
+                setUrlStatus((prev) => ({ ...prev, whisper: false }));
+            }
+
+            if (debouncedLlmBaseUrl) {
+                // Use provider type from config for URL validation
+                const providerType = debouncedLlmProvider || "openai";
+                const llmValid = await settingsService.validateUrl(
+                    providerType,
+                    debouncedLlmBaseUrl,
+                );
+                setUrlStatus((prev) => ({ ...prev, llm: llmValid }));
+            } else {
+                setUrlStatus((prev) => ({ ...prev, llm: false }));
+            }
+        };
+
+        validateUrls();
+    }, [debouncedWhisperUrl, debouncedLlmBaseUrl, debouncedLlmProvider]);
+
+    useEffect(() => {
+        const refreshWhisperModels = async () => {
+            // Guard: don't clear existing models during debounce settling
+            if (!debouncedWhisperUrl) {
+                return;
+            }
+
+            setWhisperModelsLoading(true);
+            try {
+                await settingsService.fetchWhisperModels(
+                    debouncedWhisperUrl,
+                    setWhisperModelOptions,
+                    setWhisperModelListAvailable,
+                );
+            } catch (error) {
+                console.error("Error refreshing Whisper models:", error);
+                setWhisperModelOptions([]);
+                setWhisperModelListAvailable(false);
+            } finally {
+                setWhisperModelsLoading(false);
+            }
+        };
+
+        refreshWhisperModels();
+    }, [debouncedWhisperUrl]);
+
+    useEffect(() => {
+        const refreshLlmModels = async () => {
+            // Local mode uses local model manager, not remote model listing
+            if ((config?.LLM_PROVIDER || "openai") === "local") {
+                return;
+            }
+
+            // Guard: don't clear existing models during debounce settling
+            if (!debouncedLlmBaseUrl) {
+                return;
+            }
+
+            setLlmModelsLoading(true);
+            try {
+                await settingsService.fetchLLMModels(
+                    {
+                        LLM_PROVIDER: debouncedLlmProvider || "openai",
+                        LLM_BASE_URL: debouncedLlmBaseUrl,
+                        LLM_API_KEY: config?.LLM_API_KEY || "",
+                    },
+                    setModelOptions,
+                );
+            } catch (error) {
+                console.error("Error refreshing LLM models:", error);
+                setModelOptions([]);
+            } finally {
+                setLlmModelsLoading(false);
+            }
+        };
+
+        refreshLlmModels();
+    }, [
+        debouncedLlmBaseUrl,
+        debouncedLlmProvider,
+        config?.LLM_PROVIDER,
+        config?.LLM_API_KEY,
+    ]);
+
+    // Load local models when provider is "local"
+    useEffect(() => {
+        if (config?.LLM_PROVIDER !== "local") return;
+
+        const fetchLocalModels = async () => {
+            setLlmModelsLoading(true);
+            try {
+                const localModels = await localModelApi.fetchLocalModels();
+                const modelNames = localModels.models.map(
+                    (m) => m.name || m.filename,
+                );
+                setModelOptions(modelNames);
+                const selectedLocal = localModels.models.find(
+                    (m) => m.is_selected,
+                );
+                setSelectedLocalModel(
+                    selectedLocal?.name || selectedLocal?.filename || "",
+                );
+            } catch (error) {
+                console.error("Error loading local models:", error);
+                setModelOptions([]);
+            } finally {
+                setLlmModelsLoading(false);
+            }
+        };
+
+        fetchLocalModels();
+    }, [config?.LLM_PROVIDER]);
+
+    const toggleCollapse = (section) => {
+        setCollapseStates((prev) => ({
+            ...prev,
+            [section]: !prev[section],
+        }));
+    };
+
+    const handleSaveChanges = async () => {
+        try {
+            await settingsService.saveSettings({
+                prompts,
+                config,
+                options,
+                userSettings,
+                toast,
+            });
+
+            // Fetch settings again after saving
+            await fetchCoreSettings();
+
+            toast({
+                title: "Settings saved and refreshed",
+                status: "success",
+                duration: 3000,
+                isClosable: true,
+            });
+        } catch (error) {
+            toast({
+                title: "Error saving settings",
+                description: error.message,
+                status: "error",
+                duration: 3000,
+                isClosable: true,
+            });
+        }
+    };
+
+    const handleRestoreDefaults = async () => {
+        await settingsService.resetToDefaults(fetchCoreSettings, toast);
+    };
+
+    const handlePromptReset = async (promptType) => {
+        try {
+            const updatedPrompts =
+                await settingsService.resetIndividualPrompt(promptType);
+            setPrompts(updatedPrompts);
+            toast({
+                title: "Success",
+                description: `${promptType} prompt reset to default`,
+                status: "success",
+                duration: 3000,
+                isClosable: true,
+            });
+        } catch (error) {
+            toast({
+                title: "Error",
+                description: "Failed to reset prompt",
+                status: "error",
+                duration: 3000,
+                isClosable: true,
+            });
+        }
+    };
+
+    const handlePromptChange = (promptType, field, value) => {
+        setPrompts((prev) => ({
+            ...prev,
+            [promptType]: {
+                ...prev[promptType],
+                [field]: value,
+            },
+        }));
+    };
+
+    const handleOptionChange = (category, key, value) => {
+        setOptions((prev) => ({
+            ...prev,
+            [category]: {
+                ...prev[category],
+                [key]: value,
+            },
+        }));
+    };
+    const handleConfigChange = (key, value) => {
+        // Update local config state only
+        setConfig((prev) => ({
+            ...prev,
+            [key]: value,
+        }));
+    };
+
+    const applyHostedDemoDefaults = () => {
+        setConfig((prev) => ({
+            ...prev,
+            ...HOSTED_DEMO_CONFIG,
+        }));
+        toast({
+            title: "Hosted demo endpoints selected",
+            description: "Paste your OpenRouter and Groq API keys below, then save.",
+            status: "success",
+            duration: 4000,
+            isClosable: true,
+        });
+    };
+
+    const handleClearDatabase = async (newEmbeddingModel) => {
+        await settingsService.clearDatabase(newEmbeddingModel, config, toast);
+        // Refresh settings after database clear
+        await fetchCoreSettings();
+    };
+
+    const handleReEmbed = async (newEmbeddingModel, onProgress = null) => {
+        await settingsService.reEmbed(newEmbeddingModel, config, toast, onProgress);
+        // Refresh settings after re-embed
+        await fetchCoreSettings();
+    };
+
+    if (coreLoading) {
+        return <Box>Loading...</Box>;
+    }
+    return (
+        <Box p="5" borderRadius="sm" w="100%">
+            <Text as="h2" mb="4">
+                Settings
+            </Text>
+            <VStack spacing="5" align="stretch">
+                {focusedDemo && (
+                    <Box
+                        border="1px solid"
+                        borderColor="blue.200"
+                        bg="blue.50"
+                        borderRadius="lg"
+                        p="4"
+                    >
+                        <Text fontWeight="700">Hosted MVP setup</Text>
+                        <Text fontSize="sm" color="gray.700" mt="1" mb="3">
+                            Gemma runs through OpenRouter and Whisper runs through Groq.
+                            Paste both API keys in Model Settings, then save.
+                        </Text>
+                        <Button size="sm" colorScheme="blue" onClick={applyHostedDemoDefaults}>
+                            Use OpenRouter + Groq defaults
+                        </Button>
+                    </Box>
+                )}
+
+                {!focusedDemo && <UserSettingsPanel
+                    isCollapsed={collapseStates.userSettings}
+                    setIsCollapsed={() => toggleCollapse("userSettings")}
+                    userSettings={userSettings}
+                    setUserSettings={setUserSettings}
+                    specialties={SPECIALTIES}
+                    templates={templates}
+                    letterTemplates={letterTemplates}
+                    toast={toast}
+                />}
+
+                <ModelSettingsPanel
+                    isCollapsed={collapseStates.modelSettings}
+                    setIsCollapsed={() => toggleCollapse("modelSettings")}
+                    config={config}
+                    handleConfigChange={handleConfigChange}
+                    modelOptions={modelOptions}
+                    selectedLocalModel={selectedLocalModel}
+                    embeddingModelOptions={modelOptions}
+                    whisperModelOptions={whisperModelOptions}
+                    whisperModelListAvailable={whisperModelListAvailable}
+                    whisperModelsLoading={whisperModelsLoading}
+                    llmModelsLoading={llmModelsLoading}
+                    urlStatus={urlStatus}
+                    onOpenLocalModelManager={localModelsDisclosure.onOpen}
+                    showLocalManagerButton
+                    modelManagerRefreshKey={modelManagerRefreshKey}
+                    handleClearDatabase={handleClearDatabase}
+                    handleReEmbed={handleReEmbed}
+                />
+
+                {!focusedDemo && <PromptSettingsPanel
+                    isCollapsed={collapseStates.promptSettings}
+                    setIsCollapsed={() => toggleCollapse("promptSettings")}
+                    prompts={prompts}
+                    handlePromptChange={handlePromptChange}
+                    handlePromptReset={handlePromptReset}
+                    options={options}
+                    handleOptionChange={handleOptionChange}
+                    config={config}
+                />}
+
+                {!focusedDemo && <TemplateSettingsPanel
+                    isCollapsed={collapseStates.templates}
+                    setIsCollapsed={() => toggleCollapse("templates")}
+                    templates={templates}
+                    setTemplates={setTemplates}
+                />}
+
+                {!focusedDemo && <LetterTemplatesPanel
+                    isCollapsed={collapseStates.letterTemplates}
+                    setIsCollapsed={() => toggleCollapse("letterTemplates")}
+                />}
+
+                {!focusedDemo && isChatEnabled() && (
+                    <ChatSettingsPanel
+                        isCollapsed={collapseStates.chatSettings}
+                        setIsCollapsed={() => toggleCollapse("chatSettings")}
+                        userSettings={userSettings}
+                        setUserSettings={setUserSettings}
+                    />
+                )}
+
+                <SettingsActions
+                    onSave={handleSaveChanges}
+                    onRestoreDefaults={handleRestoreDefaults}
+                />
+            </VStack>
+
+            <LocalModelManagerModal
+                isOpen={localModelsDisclosure.isOpen}
+                onClose={async () => {
+                    localModelsDisclosure.onClose();
+                    // Refresh model list based on provider
+                    if (config?.LLM_PROVIDER === "local") {
+                        try {
+                            const localModels =
+                                await localModelApi.fetchLocalModels();
+                            const modelNames = localModels.models.map(
+                                (m) => m.name || m.filename,
+                            );
+                            setModelOptions(modelNames);
+                        } catch (error) {
+                            console.error("Error loading local models:", error);
+                        }
+                    } else if (config?.LLM_BASE_URL) {
+                        await settingsService.fetchLLMModels(
+                            config,
+                            setModelOptions,
+                        );
+                    }
+                    // Trigger refresh in ModelSettingsPanel for Whisper model
+                    setModelManagerRefreshKey((prev) => prev + 1);
+                }}
+            />
+        </Box>
+    );
+};
+
+export default Settings;

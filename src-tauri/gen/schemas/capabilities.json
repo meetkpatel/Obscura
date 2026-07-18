@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"enables the default permissions","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging",{"identifier":"http:default","allow":[{"url":"https://**"},{"url":"http://localhost:**"},{"url":"http://127.0.0.1:**"}]}]}}
