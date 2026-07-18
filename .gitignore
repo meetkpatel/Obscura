@@ -1,0 +1,20 @@
+# Obscura — keep runtime junk and real secrets out of the repo.
+# NOTE: app/demo-data/ IS committed on purpose — it is synthetic (AWS EXAMPLE
+# keys, fake PII) so judges can clone and run the demo instantly. Regenerate it
+# any time with: python app/make_demo_data.py
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime / working output (never commit redacted docs or move journals)
+obscura_work/
+*.redacted.pdf
+verify*.pdf
+server.log
+
+# Envs / OS
+.venv/
+venv/
+.DS_Store
+Thumbs.db
