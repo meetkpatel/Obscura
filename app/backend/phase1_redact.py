@@ -89,22 +89,57 @@ REGEX_RULES: list[tuple[str, str, str]] = [
     ("date", "written date", r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(?:19|20)\d{2}\b"),
     ("financial", "credit card", r"\b(?:\d[ -]?){13,16}\b"),
     ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*\d{4,}\b"),
+    # --- HIPAA Safe Harbor healthcare identifiers (45 CFR 164.514(b)(2)) ---
+    ("medical", "medical record no.", r"\b(?:MRN|Medical\s*Record(?:\s*(?:No|Number|#))?)\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
+    ("medical", "health plan/member ID", r"\b(?:Member|Beneficiary|Subscriber|Policy|Group|Plan|Insurance)\s*(?:ID|No|Number|#)\.?\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
+    ("other", "URL", r"\bhttps?://[^\s]+|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    ("other", "VIN", r"\b[A-HJ-NPR-Z0-9]{17}\b"),
     ("other", "IP address", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     ("contact", "ZIP", r"\b\d{5}(?:-\d{4})?\b"),
 ]
 
-# Grounded PII taxonomy (HIPAA Safe Harbor 18 identifiers + NIST SP 800-122 +
-# common FOIA b(6)/b(7)(C) exemptions). Drives the Gemma prompt below.
+# Grounded PII taxonomy — the HIPAA Safe Harbor 18 identifiers
+# (45 CFR 164.514(b)(2)(i)(A)-(R)) + NIST SP 800-122 + FOIA b(6)/b(7)(C).
+# Drives the Gemma prompt below. Enumerates the healthcare identifiers explicitly
+# so a patient record is fully de-identified.
 PII_TAXONOMY = (
-    "full personal names (parties, officers, attorneys, notaries, witnesses); "
-    "complete street addresses INCLUDING number, street, suite/unit, city, state, "
-    "and ZIP as ONE span; P.O. boxes; organization / company / firm / employer "
-    "names tied to a person or a party; phone and fax numbers; email addresses; "
-    "SSNs and any government ID or license/bar numbers; financial account, loan, "
-    "policy, deed, or instrument numbers; dates tied to a person (birth, signing, "
-    "recording); handwritten signatures; and any quasi-identifier combination that "
-    "could re-identify a specific person or private party"
+    "full personal names (patients, providers, relatives, employers, guarantors, "
+    "attorneys, notaries, witnesses); complete street addresses INCLUDING number, "
+    "street, suite/unit, city, county, and ZIP as ONE span; P.O. boxes; "
+    "organization / company / clinic / employer names tied to a person; telephone "
+    "and fax numbers; email addresses; Social Security numbers; MEDICAL RECORD "
+    "NUMBERS (MRN); HEALTH PLAN / insurance beneficiary, member, subscriber, or "
+    "group numbers; financial account, loan, policy, or instrument numbers; "
+    "certificate, license, NPI, or DEA numbers; vehicle identifiers (VIN, plate); "
+    "device identifiers and serial numbers; web URLs; IP addresses; biometric "
+    "identifiers (finger/voice prints); full-face or identifying patient photos; "
+    "ALL dates tied to a person (birth, admission, discharge, death, service, "
+    "signing); ages over 89; handwritten signatures; and any other unique code or "
+    "quasi-identifier combination that could re-identify a specific individual"
 )
+
+# The 18 Safe Harbor identifiers (45 CFR 164.514(b)(2)(i)) and how Obscura targets
+# each — used for the coverage self-check (technical, not a compliance opinion).
+HIPAA_SAFE_HARBOR = [
+    ("A", "Names", "Gemma text pass (person/organization)"),
+    ("B", "Geographic subdivisions < state (address, city, county, ZIP)", "Gemma addresses + ZIP regex"),
+    ("C", "All date elements (except year) + ages > 89", "date regex + Gemma dates (removed in full)"),
+    ("D", "Telephone numbers", "phone regex"),
+    ("E", "Fax numbers", "phone/fax regex"),
+    ("F", "Email addresses", "email regex"),
+    ("G", "Social Security numbers", "SSN regex"),
+    ("H", "Medical record numbers", "MRN regex + Gemma"),
+    ("I", "Health plan beneficiary numbers", "health-plan/member regex + Gemma"),
+    ("J", "Account numbers", "account regex + Gemma"),
+    ("K", "Certificate / license numbers", "license/bar regex + Gemma"),
+    ("L", "Vehicle identifiers & serial numbers", "VIN regex + Gemma"),
+    ("M", "Device identifiers & serial numbers", "Gemma text pass"),
+    ("N", "Web URLs", "URL regex"),
+    ("O", "IP addresses", "IP regex"),
+    ("P", "Biometric identifiers", "Gemma text pass"),
+    ("Q", "Full-face photos & comparable images", "Gemma vision (faces)"),
+    ("R", "Any other unique identifying number/characteristic/code", "Gemma quasi-identifier reasoning"),
+]
 
 
 def regex_hits(text: str) -> list[dict]:

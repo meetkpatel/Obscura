@@ -209,6 +209,45 @@ def redact_apply(body: dict = Body(...)):
                      f"ships unredacted." if auto else "")}
 
 
+@app.get("/api/redact/hipaa")
+def hipaa_coverage():
+    """HIPAA Safe Harbor (45 CFR 164.514(b)(2)) identifier-coverage self-check.
+    TECHNICAL coverage of the app's detection — NOT a legal compliance opinion or
+    certification. HIPAA compliance also requires administrative, physical, and
+    technical safeguards, workforce training, and (for any cloud vendor) a BAA —
+    none of which a redaction tool provides. Obscura's advantage here: it runs
+    fully on-device, so PHI never leaves the machine and no cloud-AI BAA is needed.
+    If a redacted item was detected on the current document, it is marked found."""
+    detected = set()
+    for res in (STATE.get("detect") or []):
+        if res:
+            for b in res.boxes:
+                detected.add(b.category)
+    # map detected categories -> Safe Harbor items (coarse)
+    cat_map = {"A": {"person", "organization"}, "B": {"address", "contact"},
+               "C": {"date"}, "D": {"contact"}, "E": {"contact"}, "F": {"contact"},
+               "G": {"gov_id"}, "H": {"medical"}, "I": {"medical"}, "J": {"financial"},
+               "K": {"gov_id"}, "L": {"other"}, "M": {"other"}, "N": {"other"},
+               "O": {"other"}, "P": {"other"}, "Q": {"face", "signature"}, "R": {"other"}}
+    items = []
+    for code, name, method in p1.HIPAA_SAFE_HARBOR:
+        items.append({"code": code, "identifier": name, "detection": method,
+                      "found_on_document": bool(cat_map.get(code, set()) & detected)})
+    return {
+        "standard": "HIPAA Safe Harbor — 45 CFR 164.514(b)(2)(i)",
+        "disclaimer": ("Technical detection-coverage self-check, NOT a legal "
+                       "compliance certification. De-identification success under "
+                       "Safe Harbor also requires no actual knowledge that residual "
+                       "data could re-identify an individual; have a qualified "
+                       "reviewer / compliance officer confirm. On-device: no PHI "
+                       "leaves this machine."),
+        "identifiers": items,
+        "note_on_dates_zip": ("Obscura REMOVES dates and ZIPs entirely — more "
+                              "conservative than Safe Harbor's keep-year / 3-digit-ZIP "
+                              "allowances, which is acceptable (removing more is fine)."),
+    }
+
+
 @app.get("/api/redact/report")
 def redact_report():
     """Downloadable verification report — the defensibility artifact. Records the
@@ -301,6 +340,10 @@ def index():
 
 if FRONTEND.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND)), name="static")
+
+DEMO = Path(__file__).resolve().parent.parent / "demo-data"
+if DEMO.exists():
+    app.mount("/demo-data", StaticFiles(directory=str(DEMO)), name="demo")
 
 
 # startup: reconcile any interrupted organize run
