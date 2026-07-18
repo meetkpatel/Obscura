@@ -41,6 +41,7 @@ STATE: dict = {"pages": [], "detect": [], "plan": None, "redacted_pdf": None}
 def health():
     h = gemma.health()
     h["admin"] = p2.is_admin()
+    h["presidio"] = p1.presidio_detect.available()  # deterministic Scan layer on?
     return h
 
 
