@@ -348,15 +348,22 @@ def merge(boxes: list[Box], thresh=0.5) -> list[Box]:
 # ---------------------------------------------------------------------------
 
 def detect_page(img: Image.Image, model: str, use_vision=True,
-                use_gemma_text=True) -> DetectResult:
+                use_gemma_text=True, vision_model: str | None = None) -> DetectResult:
+    """`model` runs the text-entity reasoning (respects the user's Fast/Quality
+    choice). Vision (signatures/faces only) runs on the SAME model by default —
+    on an 8GB card, using a different model for vision would force Ollama to
+    evict/reload between calls (thrash). Warmup covers the cold-load cost."""
     W, H = img.size
+    vision_model = vision_model or model
     full_text, words = ocr_words(img)
     hits = regex_hits(full_text)
     boxes = ground_text_boxes(hits, words)          # deterministic PII, exact
     if use_gemma_text:                              # names/addresses/context, OCR-grounded
         boxes += gemma_text_entities(full_text, words, model)
-    if use_vision:                                  # signatures/faces only — visual
-        boxes += [b for b in gemma_vision_boxes(img, model)
+    # Vision is for signatures/faces. Skip it on text-dense pages (signatures are
+    # rare there and it's the slow part) — keeps the 12B path responsive.
+    if use_vision and len(full_text) < 800:
+        boxes += [b for b in gemma_vision_boxes(img, vision_model)
                   if b.category in VISUAL_CATS]
     boxes = merge(boxes)
     # clamp to page

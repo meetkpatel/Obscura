@@ -44,6 +44,19 @@ def health():
     return h
 
 
+@app.post("/api/warmup")
+def warmup(body: dict = Body(default={})):
+    """Pre-load a model into VRAM so the FIRST real request isn't slowed by a
+    cold load (evicting the other model + loading 12B can take ~15-20s on an
+    8GB card). Called when the user picks a model in the UI."""
+    model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
+    try:
+        gemma.generate("ok", model=model, num_predict=1, timeout=120)
+        return {"ready": True, "model": model}
+    except gemma.GemmaError as e:
+        return {"ready": False, "model": model, "error": str(e)}
+
+
 @app.get("/api/hardware")
 def hardware_probe():
     """Detect this machine and recommend a Gemma 4 model (offer 12B if capable)."""
