@@ -44,6 +44,13 @@ def _post(payload: dict, timeout: int) -> dict:
             f"Ollama unreachable at {OLLAMA} ({e}). Is `ollama serve` running "
             f"and the model pulled? This app never falls back to a network model."
         )
+    except (TimeoutError, OSError) as e:
+        # A slow page (large scan on the 12B model) can exceed the timeout and
+        # raise TimeoutError/socket errors — NOT a URLError. Surface as GemmaError
+        # so per-page callers skip that page gracefully instead of 500-ing.
+        raise GemmaError(f"Ollama request timed out/failed after {timeout}s ({e}).")
+    except Exception as e:  # noqa: BLE001 — never let the model layer 500 the app
+        raise GemmaError(f"Ollama request error: {type(e).__name__}: {e}")
 
 
 def generate(

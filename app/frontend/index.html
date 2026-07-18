@@ -229,16 +229,31 @@ const drop=$('#drop');
 ;['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
 drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
 
+let CUR=0;
 async function onFile(f){
   if(!f) return;
   $('#redactWork').classList.remove('hidden');
-  $('#items').innerHTML='<div class="rs"><span class="spin"></span> Gemma is reading the document…</div>';
+  $('#items').innerHTML='<div class="rs"><span class="spin"></span> Gemma is reading the document… (large scans on quality mode can take a while)</div>';
   const fd=new FormData(); fd.append('file',f);
   try{
-    const r=await (await fetch('/api/redact/detect?quality='+(q()?1:0),{method:'POST',body:fd})).json();
-    PAGES=r.pages; DET=r.pages.map(p=>p.boxes); renderPage(0);
-  }catch(e){ $('#items').innerHTML='<div class="rs">Detection failed: '+e+'</div>'; }
+    const resp=await fetch('/api/redact/detect?quality='+(q()?1:0),{method:'POST',body:fd});
+    const r=await resp.json();
+    if(r.error){ $('#items').innerHTML='<div class="proofbox">⚠ '+r.error+'</div>'; return; }
+    PAGES=r.pages; CUR=0; renderPage(0);
+    if(r.note) toast(r.note);
+    renderPager(r.page_count||PAGES.length);
+  }catch(e){ $('#items').innerHTML='<div class="proofbox">⚠ Detection failed: '+e+'</div>'; }
 }
+function renderPager(n){
+  let p=$('#pager'); if(!p){ p=document.createElement('div'); p.id='pager'; p.className='flex'; p.style.margin='10px 0';
+    $('#cv').parentElement.insertBefore(p,$('#cv')); }
+  if(n<=1){ p.innerHTML=''; return; }
+  p.innerHTML=`<button class="ghost" onclick="pg(-1)">‹ Prev</button>
+    <span class="rs">Page <b id="pgn">${CUR+1}</b> of ${n}</span>
+    <button class="ghost" onclick="pg(1)">Next ›</button>`;
+}
+function pg(d){ CUR=Math.max(0,Math.min(PAGES.length-1,CUR+d)); renderPage(CUR);
+  const e=$('#pgn'); if(e) e.textContent=CUR+1; }
 
 function renderPage(i){
   const p=PAGES[i]; const cv=$('#cv'), ctx=cv.getContext('2d');
@@ -270,9 +285,10 @@ async function doRedact(){
   $('#redactBtn').innerHTML='<span class="spin"></span> Destroying pixels…';
   const r=await (await fetch('/api/redact/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dec)})).json();
   $('#redactBtn').textContent='Redact & Export';
-  // show redacted preview
+  // swap the page images for the redacted previews so the pager shows all pages redacted
+  PAGES.forEach((p,i)=>{ if(r.previews[i]){ p.image=r.previews[i]; p.boxes=[]; } });
   const cv=$('#cv'),ctx=cv.getContext('2d'); const img=new Image();
-  img.onload=()=>{cv.width=img.width;cv.height=img.height;ctx.drawImage(img,0,0);}; img.src=r.previews[0];
+  img.onload=()=>{cv.width=img.width;cv.height=img.height;ctx.drawImage(img,0,0);}; img.src=r.previews[CUR]||r.previews[0];
   const v=r.verify;
   $('#proof').innerHTML=`<div class="proofbox ${v.passed?'pass':''}">
      <strong>${v.passed?'✓ Self-verification passed':'⚠ Residual detected'}</strong> —

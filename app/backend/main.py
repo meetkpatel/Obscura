@@ -81,18 +81,34 @@ def egress() -> EgressReport:
 @app.post("/api/redact/detect")
 async def redact_detect(file: UploadFile = File(...),
                         quality: bool = False):
-    raw = await file.read()
-    src = WORK / f"in_{file.filename}"
-    src.write_bytes(raw)
-    pages = p1.load_pages(str(src))
-    model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    results = [p1.detect_page(pg, model) for pg in pages]
-    STATE["pages"] = pages
-    STATE["detect"] = results
-    # return page images (base64) + boxes for the review UI
+    """Always returns JSON. A slow/failed page keeps its deterministic (regex+OCR)
+    boxes and just skips the Gemma passes — never an HTML 500."""
     import base64
-    out = []
-    for pg, res in zip(pages, results):
+    try:
+        raw = await file.read()
+        src = WORK / f"in_{Path(file.filename).name}"
+        src.write_bytes(raw)
+        pages = p1.load_pages(str(src))
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Could not open '{file.filename}': {type(e).__name__}: {e}. "
+                      f"Encrypted or unsupported PDFs may need to be re-saved/printed to PDF first."},
+            status_code=200)
+
+    model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
+    results, out, skipped = [], [], []
+    for i, pg in enumerate(pages):
+        try:
+            res = p1.detect_page(pg, model)
+        except Exception as e:  # last-resort: deterministic-only for this page
+            try:
+                res = p1.detect_page(pg, model, use_vision=False, use_gemma_text=False)
+                skipped.append(i + 1)
+            except Exception:
+                res = p1.DetectResult(page_width=pg.size[0], page_height=pg.size[1],
+                                      boxes=[], full_text="", stats={"error": str(e)[:120]})
+                skipped.append(i + 1)
+        results.append(res)
         buf = io.BytesIO(); pg.save(buf, "PNG")
         out.append({
             "image": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
@@ -100,7 +116,12 @@ async def redact_detect(file: UploadFile = File(...),
             "boxes": [b.model_dump() for b in res.boxes],
             "stats": res.stats,
         })
-    return {"pages": out}
+    STATE["pages"] = pages
+    STATE["detect"] = results
+    return {"pages": out, "page_count": len(pages),
+            "gemma_skipped_pages": skipped,
+            "note": (f"{len(skipped)} page(s) used deterministic detection only "
+                     f"(Gemma slow/unavailable on those pages)." if skipped else "")}
 
 
 @app.post("/api/redact/apply")
