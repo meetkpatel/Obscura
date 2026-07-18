@@ -86,6 +86,10 @@ REGEX_RULES: list[tuple[str, str, str]] = [
     ("contact", "email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ("contact", "phone", r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
     ("address", "P.O. Box", r"\bP\.?\s*O\.?\s*Box\s+\d+\b"),
+    # Street address — number + street name + street-type suffix (+ optional unit).
+    # Suffix-anchored so it's high precision. Presidio NER only catches the CITY;
+    # this catches the street line that would otherwise survive without Gemma.
+    ("address", "street address", r"\b\d{1,6}\s+(?:[A-Z][A-Za-z0-9.'-]+\s+){0,4}(?i:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Terrace|Ter|Place|Pl|Circle|Cir|Highway|Hwy|Parkway|Pkwy|Trail|Trl|Square|Sq|Loop|Row|Pike)\b\.?(?:\s*,?\s*(?:Apt|Suite|Ste|Unit|Bldg|Fl|Floor|Rm|Room|#)\s*\.?\s*[A-Za-z0-9-]+)?"),
     ("date", "date", r"\b(?:0?[1-9]|1[0-2])[/\-.](?:0?[1-9]|[12]\d|3[01])[/\-.](?:19|20)\d{2}\b"),
     ("date", "written date", r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(?:19|20)\d{2}\b"),
     ("financial", "credit card", r"\b(?:\d[ -]?){13,16}\b"),
@@ -322,21 +326,23 @@ TEXT_ENTITY_PROMPT = (
 # unless they're part of a re-identifying phrase Presidio would miss.
 QUASI_ID_PROMPT = (
     "You are a records/FOIA redaction officer doing a SECOND pass. A deterministic "
-    "engine has already flagged the obvious identifiers (names, addresses, emails, "
-    "phones, SSNs, account and ID numbers, dates). Your job is the subtle layer it "
-    "cannot reason about: QUASI-IDENTIFIERS and re-identifying context — phrases "
-    "that, in combination, could single out a specific person even with the obvious "
-    "identifiers removed.\n"
+    "engine has already flagged the obvious identifiers (names, emails, phones, "
+    "SSNs, account and ID numbers, dates, and the CITY of an address). Your job is "
+    "two things it cannot reason about:\n"
+    "1. COMPLETE STREET ADDRESSES — the upstream engine only catches the city/ZIP, "
+    "so return each full mailing address as ONE span (number + street + unit + city "
+    "+ state + ZIP, e.g. '415 Oak Street, Apt 3, Fresno, CA 93706').\n"
+    "2. QUASI-IDENTIFIERS and re-identifying context — phrases that, in combination, "
+    "could single out a specific person even with the obvious identifiers removed. "
     "Examples: a unique job title tied to a place ('the only female fire captain in "
-    "Dubuque'); a distinctive medical condition or diagnosis; a rare event, case, or "
-    "docket description; a relationship that pins an identity ('the plaintiff's "
-    "twin brother'); an unusual physical description; a non-standard internal ID, "
-    "badge, or reference number the rules missed.\n"
-    "Do NOT re-list plain names, addresses, emails, phones, or standard ID numbers — "
-    "those are already handled. Only return spans that add re-identification risk.\n"
+    "Dubuque'); a distinctive medical condition; a rare case/docket description; a "
+    "relationship that pins an identity ('the plaintiff's twin brother'); a "
+    "non-standard internal ID or badge number the rules missed.\n"
+    "Do NOT re-list plain names, emails, phones, or standard ID numbers — those are "
+    "already handled. Return full addresses plus anything that adds re-identification risk.\n"
     "Copy each 'text' value EXACTLY (verbatim substring) so it can be located.\n"
     "Return ONLY JSON: {\"items\":[{\"text\":\"verbatim substring\",\"category\":"
-    "\"person|medical|gov_id|financial|other\",\"reason\":\"why it re-identifies\"}]}."
+    "\"address|person|medical|gov_id|financial|other\",\"reason\":\"why it re-identifies\"}]}."
     " If none, {\"items\":[]}.\n\nDOCUMENT:\n"
 )
 
