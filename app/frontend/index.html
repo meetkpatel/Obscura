@@ -78,6 +78,8 @@ canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background
 .dirItem{padding:8px 12px;border-radius:8px;cursor:pointer;border:1px solid transparent;font-size:14px}
 .dirItem:hover{background:var(--panel2);border-color:var(--accent);color:var(--ink)}
 .treeRow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line)}
+.bar{height:10px;background:var(--panel2);border:1px solid var(--line);border-radius:99px;overflow:hidden}
+.barFill{height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .4s;box-shadow:0 0 12px #19c3a5aa}
 /* ---- scanning HUD ---- */
 #cvWrap{border-radius:10px;overflow:hidden}
 .hud{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:8px;
@@ -229,17 +231,47 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
             <button class="ghost" id="upBtn" onclick="browseUp()">↑ Up</button>
             <span class="mono rs" id="curPath" style="max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
           </div>
-          <div class="flex">
-            <select id="profileSel" class="field" style="width:auto;margin:0">
-              <option value="healthcare" selected>Healthcare profile</option>
-              <option value="general">General profile</option>
+          <div class="flex" style="flex-wrap:wrap;gap:8px">
+            <select id="scopeSel" class="field" style="width:auto;margin:0" onchange="scopeChanged()">
+              <option value="folder" selected>This folder + subfolders</option>
+              <option value="downloads">Downloads</option>
+              <option value="home">Whole user profile</option>
             </select>
-            <button onclick="scanHere()" id="scanBtnO">Scan this folder ▸</button>
+            <select id="profileSel" class="field" style="width:auto;margin:0">
+              <option value="healthcare" selected>Healthcare</option>
+              <option value="general">General</option>
+            </select>
+            <select id="runModeSel" class="field" style="width:auto;margin:0" title="How hard to run">
+              <option value="eco" selected>Eco (gentle)</option>
+              <option value="idle">Idle-only (pause when you work)</option>
+              <option value="now">Full speed</option>
+            </select>
+            <button onclick="scanHere()" id="scanBtnO">Scan ▸</button>
           </div>
         </div>
-        <div id="dirList" style="max-height:34vh;overflow:auto;margin-top:12px"></div>
+        <div id="dirList" style="max-height:30vh;overflow:auto;margin-top:12px"></div>
       </div>
       <span class="rs" id="planNote"></span>
+
+      <!-- Step 1: existing structure (taxonomy) -->
+      <div class="panel hidden" id="taxoPanel" style="margin-top:14px">
+        <strong>Step 1 · Current structure</strong>
+        <div class="rs" id="taxoSummary" style="margin:6px 0"></div>
+        <div id="taxoAreas" style="max-height:24vh;overflow:auto"></div>
+      </div>
+
+      <!-- apply progress -->
+      <div class="panel hidden" id="applyProgress" style="margin-top:14px">
+        <div class="flex" style="justify-content:space-between">
+          <strong id="apTitle">Reorganizing…</strong>
+          <div class="flex">
+            <button class="ghost" id="pauseBtn" onclick="pauseJob()">Pause</button>
+            <button class="ghost" id="cancelBtn" onclick="cancelJob()">Stop</button>
+          </div>
+        </div>
+        <div class="bar" style="margin:10px 0"><div class="barFill" id="apBar"></div></div>
+        <div class="rs mono" id="apStat"></div>
+      </div>
 
       <div id="orgOut" class="hidden" style="margin-top:18px">
         <!-- structure + duplicates summary -->
@@ -592,18 +624,36 @@ async function browseTo(path){
 }
 function browseUp(){ if(CURDIR){ const p=CURDIR.replace(/[\\/]+$/,''); const parent=p.substring(0,Math.max(p.lastIndexOf('\\'),p.lastIndexOf('/'))); browseTo(parent.length>2?parent:(parent+'\\')); } }
 
+function scope(){ return $('#scopeSel').value; }
+function runMode(){ return $('#runModeSel').value; }
+function scopeChanged(){
+  const s=scope();
+  // folder scope needs a picked directory; downloads/home are implicit
+  $('#browser').style.opacity = s==='folder' ? '1' : '.6';
+}
+
 async function scanHere(){
-  if(!CURDIR){ toast('pick a folder first'); return; }
+  const s=scope();
+  if(s==='folder' && !CURDIR){ toast('pick a folder first'); return; }
   const profile=$('#profileSel').value;
-  $('#scanBtnO').innerHTML='<span class="spin"></span> Reading first pages…';
-  $('#planNote').textContent='Gemma is reading each file — one at a time.';
+  $('#scanBtnO').innerHTML='<span class="spin"></span> Mapping…';
   try{
+    // Step 1 — map the existing structure first (free, instant)
+    const t=await jfetch('/api/organize/taxonomy',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({scope:s, path:CURDIR})}, 60000);
+    if(t.error){ toast(t.error); $('#scanBtnO').textContent='Scan ▸'; return; }
+    $('#taxoPanel').classList.remove('hidden');
+    $('#taxoSummary').innerHTML=`<b>${t.total_files}</b> files across <b>${t.total_areas}</b> areas in <span class="mono">${esc(t.root)}</span>${t.truncated?' (sampled)':''}`;
+    $('#taxoAreas').innerHTML=t.areas.map(a=>`<div class="treeRow"><span class="mono">${esc(a.area)}</span><span class="rs">${a.files} files · ${a.top_types.join(', ')}</span></div>`).join('');
+    // Step 2 — Gemma reads first pages and proposes the plan
+    $('#scanBtnO').innerHTML='<span class="spin"></span> Reading first pages…';
+    $('#planNote').textContent='Gemma is reading each file — one at a time.';
     const r=await jfetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({root:CURDIR, profile, quality:q()})}, 600000);
-    if(r.error){ toast(r.error); $('#scanBtnO').textContent='Scan this folder ▸'; return; }
+      body:JSON.stringify({scope:s, root:CURDIR, profile, run_mode:runMode(), quality:q()})}, 1800000);
+    if(r.error){ toast(r.error); $('#scanBtnO').textContent='Scan ▸'; return; }
     renderPlan(r);
   }catch(e){ toast('scan failed: '+e.message); }
-  $('#scanBtnO').textContent='Scan this folder ▸';
+  $('#scanBtnO').textContent='Scan ▸';
 }
 
 function renderPlan(r){
@@ -630,15 +680,45 @@ function renderPlan(r){
       <td class="rs">${esc(p.reason)}</td><td>${(p.confidence*100|0)}%</td>`;
     tb.appendChild(tr); });
 }
+let apPoll=null;
 async function doApply(){
   const excluded=$$('#orgTable tbody input:not(:checked)').map(c=>c.dataset.src);
-  $('#applyBtn').innerHTML='<span class="spin"></span> Moving…';
   try{
-    const r=await jfetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({excluded})},120000);
-    toast('Moved '+r.moved+' files'+(r.skipped.length?(' · skipped '+r.skipped.length):'')+'. Undo is ready.');
+    const r=await jfetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({excluded, run_mode:runMode()})},30000);
+    if(r.error){ toast(r.error); return; }
+    $('#applyProgress').classList.remove('hidden');
+    $('#apTitle').textContent='Reorganizing… ('+r.mode+' mode)';
+    $('#pauseBtn').textContent='Pause';
+    pollApply();
   }catch(e){ toast('apply failed: '+e.message); }
-  $('#applyBtn').textContent='Apply';
 }
+function pollApply(){
+  clearInterval(apPoll);
+  apPoll=setInterval(async()=>{
+    try{
+      const s=await jfetch('/api/organize/apply_status',{},15000);
+      const pct=s.total? Math.round(s.done/s.total*100):0;
+      $('#apBar').style.width=pct+'%';
+      const g=s.gate||{};
+      const gate = g.state==='waiting-idle' ? '⏸ waiting — you\'re working' :
+                   g.state==='waiting-cpu' ? '⏸ waiting — CPU busy ('+g.cpu+'%)' :
+                   g.state==='paused' ? '⏸ paused' : '▶ running';
+      $('#apStat').textContent=`${s.moved}/${s.total} moved · ${gate} · idle ${g.idle_s}s · CPU ${g.cpu}%`;
+      if(s.state==='done'||s.state==='cancelled'){
+        clearInterval(apPoll);
+        $('#apTitle').textContent = s.state==='done'?'✓ Reorganized '+s.moved+' files':'Stopped';
+        toast(s.state==='done'?('Done — moved '+s.moved+' files. Undo is ready.'):'Stopped.');
+      }
+    }catch(e){ clearInterval(apPoll); }
+  }, 1000);
+}
+async function pauseJob(){
+  const b=$('#pauseBtn');
+  if(b.textContent==='Pause'){ await jfetch('/api/organize/pause',{method:'POST'},15000); b.textContent='Resume'; }
+  else{ await jfetch('/api/organize/resume',{method:'POST'},15000); b.textContent='Pause'; }
+}
+async function cancelJob(){ await jfetch('/api/organize/cancel',{method:'POST'},15000); }
 async function doUndo(){
   try{ const r=await jfetch('/api/organize/undo',{method:'POST'},120000);
     toast('Restored '+r.restored+' files to their original locations.');

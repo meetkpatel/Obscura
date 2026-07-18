@@ -29,6 +29,7 @@ import fitz  # PyMuPDF
 from contracts import (FileProposal, OrganizePlan, DuplicateGroup, DirEntry,
                        DirListing)
 import gemma
+import throttle
 
 IS_WIN = sys.platform.startswith("win")
 
@@ -95,6 +96,44 @@ def browse(path: str | None) -> DirListing:
     parent = str(p.parent) if p.parent != p else None
     return DirListing(path=str(p), parent=parent, dirs=dirs, file_count=fcount,
                       drives=list_drives(), shortcuts=_shortcuts())
+
+
+# ---------------------------------------------------------------------------
+# 0b. Taxonomy map — understand the EXISTING structure first (fast, free)
+# ---------------------------------------------------------------------------
+
+def map_taxonomy(root: str, max_dirs=400) -> dict:
+    """Deterministic scan of the existing folder tree: per top-level area, count
+    files and the dominant extensions. Free (no model). This is step 1 — know the
+    lay of the land before proposing changes."""
+    rootp = Path(root)
+    areas: dict[str, dict] = {}
+    total_files, total_dirs, dirs_seen = 0, 0, 0
+    for dirpath, dirnames, filenames in os.walk(rootp):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        dirs_seen += 1
+        if dirs_seen > max_dirs:
+            break
+        rel = Path(dirpath).relative_to(rootp)
+        area = rel.parts[0] if rel.parts else "(root)"
+        a = areas.setdefault(area, {"files": 0, "exts": {}})
+        for fn in filenames:
+            if fn.startswith("."):
+                continue
+            total_files += 1
+            a["files"] += 1
+            ext = Path(fn).suffix.lower() or "(none)"
+            a["exts"][ext] = a["exts"].get(ext, 0) + 1
+        total_dirs += len(dirnames)
+    # top exts per area
+    out_areas = []
+    for name, a in sorted(areas.items(), key=lambda kv: -kv[1]["files"]):
+        top = sorted(a["exts"].items(), key=lambda kv: -kv[1])[:5]
+        out_areas.append({"area": name, "files": a["files"],
+                          "top_types": [f"{e} ({c})" for e, c in top]})
+    return {"root": str(rootp), "total_files": total_files,
+            "total_areas": len(areas), "areas": out_areas[:40],
+            "truncated": dirs_seen > max_dirs}
 
 
 # ---------------------------------------------------------------------------
@@ -282,26 +321,31 @@ def sanitize(s: str, maxlen=40) -> str:
     return s[:maxlen].strip("-")
 
 
+def _clean_date(date: str) -> str:
+    """Extract just a YYYY-MM-DD from a possibly-messy model date field."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", date or "")
+    return m.group(1) if m else ""
+
+
 def _place(meta: dict, profile: str) -> tuple[str, str, str]:
-    """Return (category, subcategory, new_name) from classified metadata."""
-    dtype = (meta.get("doc_type") or "other").lower()
-    date = meta.get("doc_date") or ""
-    datep = (date + "_") if re.match(r"\d{4}-\d{2}-\d{2}", date) else ""
+    """Return (category, subcategory, new_name) from classified metadata.
+    Every component is sanitized so filenames are always clean + searchable."""
+    dtype = sanitize((meta.get("doc_type") or "other").lower(), 20) or "other"
+    date = _clean_date(meta.get("doc_date"))
     desc = sanitize(meta.get("descriptor"), 40) or "document"
     if profile == "healthcare":
-        cat, sub = HC_DOCTYPES.get(dtype, ("Administrative", "Other"))
+        cat, sub = HC_DOCTYPES.get((meta.get("doc_type") or "other").lower(),
+                                   ("Administrative", "Other"))
         patient = sanitize(meta.get("patient"), 30)
-        # searchable: DATE _ Patient _ DocType _ descriptor
-        parts = [p for p in [datep.rstrip("_"), patient, dtype, desc] if p]
-        new_name = "_".join(parts)
-        return cat, sub, new_name
-    # general profile
+        parts = [p for p in [date, patient, dtype, desc] if p]   # DATE_Patient_Type_desc
+        return cat, sub, "_".join(parts)
     cat = meta.get("category", "Other") or "Other"
-    new_name = f"{datep}{sanitize(dtype,16)}_{desc}"
-    return cat, "", new_name
+    parts = [p for p in [date, dtype, desc] if p]
+    return cat, "", "_".join(parts)
 
 
-def build_plan(root: str, model: str, profile="healthcare", limit=200) -> OrganizePlan:
+def build_plan(root: str, model: str, profile="healthcare", limit=200,
+               gate: "throttle.Gate | None" = None) -> OrganizePlan:
     files = inventory(root, limit)
     dup_groups, dup_paths = find_duplicates(files)
     cache: dict = {}
@@ -309,6 +353,8 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200) -> Organi
     used: set[str] = set()
     tree: dict = {}
     for fp in files:
+        if gate and not gate.wait():   # stay polite during a big scan
+            break
         is_dup = str(fp) in dup_paths
         meta = classify(fp, model, cache, profile) if not is_dup else {"doc_type": "duplicate", "confidence": 1.0}
         if is_dup:
@@ -380,41 +426,115 @@ def _fsync_write(path: Path, obj) -> None:
         os.fsync(f.fileno())
 
 
+def _move_one(p: FileProposal, entries: list, journal_path: str) -> tuple[bool, dict | None]:
+    """Move a single proposal, journaled. Returns (moved, skip_info)."""
+    src, dst = Path(p.src), Path(p.dst)
+    if not src.exists():
+        return False, {"src": p.src, "why": "source gone"}
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        k = 1
+        while dst.with_stem(f"{dst.stem}-{k}").exists():
+            k += 1
+        dst = dst.with_stem(f"{dst.stem}-{k}")
+    if src.drive.lower() != dst.drive.lower():
+        return False, {"src": p.src, "why": "cross-volume (out of scope)"}
+    entry = {"op": "move", "src": str(src), "dst": str(dst),
+             "hash": p.quick_hash, "ts": _now(), "committed": False}
+    entries.append(entry)
+    _fsync_write(Path(journal_path), entries)      # intent BEFORE the move
+    try:
+        os.replace(src, dst)
+        entry["committed"] = True
+        _fsync_write(Path(journal_path), entries)
+        return True, None
+    except PermissionError:
+        entries.pop(); _fsync_write(Path(journal_path), entries)
+        return False, {"src": p.src, "why": "file locked/open"}
+    except Exception as e:
+        entries.pop(); _fsync_write(Path(journal_path), entries)
+        return False, {"src": p.src, "why": str(e)}
+
+
 def apply_plan(plan: OrganizePlan, journal_path: str) -> dict:
+    """Synchronous apply (small folders / 'now' mode)."""
     entries, moved, skipped = [], 0, []
     for p in plan.proposals:
         if p.excluded:
             continue
-        src, dst = Path(p.src), Path(p.dst)
-        if not src.exists():
-            skipped.append({"src": p.src, "why": "source gone"})
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.exists():
-            k = 1
-            while dst.with_stem(f"{dst.stem}-{k}").exists():
-                k += 1
-            dst = dst.with_stem(f"{dst.stem}-{k}")
-        if src.drive.lower() != dst.drive.lower():
-            skipped.append({"src": p.src, "why": "cross-volume (out of scope)"})
-            continue
-        entry = {"op": "move", "src": str(src), "dst": str(dst),
-                 "hash": p.quick_hash, "ts": _now(), "committed": False}
-        entries.append(entry)
-        _fsync_write(Path(journal_path), entries)
-        try:
-            os.replace(src, dst)
-            entry["committed"] = True
-            _fsync_write(Path(journal_path), entries)
+        ok, skip = _move_one(p, entries, journal_path)
+        if ok:
             moved += 1
-        except PermissionError:
-            skipped.append({"src": p.src, "why": "file locked/open"})
-            entries.pop(); _fsync_write(Path(journal_path), entries)
-        except Exception as e:
-            skipped.append({"src": p.src, "why": str(e)})
-            entries.pop(); _fsync_write(Path(journal_path), entries)
+        elif skip:
+            skipped.append(skip)
     return {"moved": moved, "skipped": skipped, "journal": journal_path,
             "map": [{"from": e["src"], "to": e["dst"]} for e in entries if e["committed"]]}
+
+
+# --- Background, throttled, idle-aware apply job -------------------------------
+import threading
+
+_JOB: dict = {"thread": None, "gate": None, "total": 0, "done": 0, "moved": 0,
+              "skipped": [], "state": "idle", "journal": ""}
+
+
+def _apply_worker(plan: OrganizePlan, journal_path: str, mode: str):
+    gate = throttle.Gate(mode)
+    _JOB.update(gate=gate, total=len([p for p in plan.proposals if not p.excluded]),
+                done=0, moved=0, skipped=[], state="running", journal=journal_path)
+    throttle.set_low_priority()
+    entries = []
+    try:
+        for p in plan.proposals:
+            if p.excluded:
+                continue
+            if not gate.wait():          # cancelled
+                _JOB["state"] = "cancelled"
+                break
+            ok, skip = _move_one(p, entries, journal_path)
+            _JOB["done"] += 1
+            if ok:
+                _JOB["moved"] += 1
+            elif skip:
+                _JOB["skipped"].append(skip)
+        else:
+            _JOB["state"] = "done"
+    finally:
+        throttle.restore_priority()
+        if _JOB["state"] not in ("cancelled", "done"):
+            _JOB["state"] = "done"
+
+
+def start_apply(plan: OrganizePlan, journal_path: str, mode="eco") -> dict:
+    if _JOB["thread"] and _JOB["thread"].is_alive():
+        return {"error": "a reorg is already running"}
+    t = threading.Thread(target=_apply_worker, args=(plan, journal_path, mode), daemon=True)
+    _JOB["thread"] = t
+    t.start()
+    return {"started": True, "mode": mode,
+            "total": len([p for p in plan.proposals if not p.excluded])}
+
+
+def apply_job_status() -> dict:
+    g = _JOB.get("gate")
+    snap = g.snapshot() if g else {}
+    return {"state": _JOB["state"], "done": _JOB["done"], "total": _JOB["total"],
+            "moved": _JOB["moved"], "skipped": len(_JOB["skipped"]), "gate": snap}
+
+
+def pause_job():
+    if _JOB.get("gate"): _JOB["gate"].paused = True
+    return apply_job_status()
+
+
+def resume_job():
+    if _JOB.get("gate"): _JOB["gate"].paused = False
+    return apply_job_status()
+
+
+def cancel_job():
+    if _JOB.get("gate"): _JOB["gate"].cancelled = True
+    return apply_job_status()
 
 
 def undo(journal_path: str) -> dict:

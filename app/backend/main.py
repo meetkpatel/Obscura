@@ -302,34 +302,77 @@ def secure_scan(body: dict = Body(default={})):
 # Phase 3 — ORGANIZE
 # --------------------------------------------------------------------------
 
+def _resolve_scope(scope: str, path: str | None) -> str | None:
+    """scope: folder(uses path) | downloads | home."""
+    home = Path.home()
+    if scope == "downloads":
+        return str(home / "Downloads")
+    if scope in ("home", "computer"):
+        return str(home)
+    return path
+
+
 @app.post("/api/organize/browse")
 def organize_browse(body: dict = Body(default={})):
     """In-app directory browser. body={path} or empty for the 'This PC' view."""
     return p3.browse(body.get("path")).model_dump()
 
 
+@app.post("/api/organize/taxonomy")
+def organize_taxonomy(body: dict = Body(default={})):
+    """Step 1 — map the EXISTING folder/file structure (free, no model)."""
+    root = _resolve_scope(body.get("scope", "folder"), body.get("path"))
+    if not root or not os.path.isdir(root):
+        return JSONResponse({"error": f"not a folder: {root}"}, status_code=400)
+    return p3.map_taxonomy(root)
+
+
 @app.post("/api/organize/plan")
 def organize_plan(body: dict = Body(...)):
-    root = body.get("root")
+    root = _resolve_scope(body.get("scope", "folder"), body.get("root") or body.get("path"))
     quality = body.get("quality", False)
     profile = body.get("profile", "healthcare")
     if not root or not os.path.isdir(root):
         return JSONResponse({"error": f"not a folder: {root}"}, status_code=400)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    plan = p3.build_plan(root, model, profile=profile, limit=body.get("limit", 200))
+    gate = p3.throttle.Gate(body.get("run_mode", "eco"))   # gentle during a big scan
+    plan = p3.build_plan(root, model, profile=profile, limit=body.get("limit", 200), gate=gate)
     STATE["plan"] = plan
     return plan.model_dump()
 
 
 @app.post("/api/organize/apply")
 def organize_apply(body: dict = Body(default={})):
+    """Start the reorg as a throttled, idle-aware BACKGROUND job so it never
+    fights the user for the machine. Poll /api/organize/apply_status."""
     plan = STATE.get("plan")
     if not plan:
         return JSONResponse({"error": "no plan built yet"}, status_code=400)
     excl = set(body.get("excluded", []))
     for pr in plan.proposals:
         pr.excluded = pr.src in excl
-    return p3.apply_plan(plan, JOURNAL)
+    mode = body.get("run_mode", "eco")   # idle | eco | now
+    return p3.start_apply(plan, JOURNAL, mode)
+
+
+@app.get("/api/organize/apply_status")
+def organize_apply_status():
+    return p3.apply_job_status()
+
+
+@app.post("/api/organize/pause")
+def organize_pause():
+    return p3.pause_job()
+
+
+@app.post("/api/organize/resume")
+def organize_resume():
+    return p3.resume_job()
+
+
+@app.post("/api/organize/cancel")
+def organize_cancel():
+    return p3.cancel_job()
 
 
 @app.post("/api/organize/undo")
