@@ -102,6 +102,17 @@ canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background
 .dirItem{padding:8px 12px;border-radius:8px;cursor:pointer;border:1px solid transparent;font-size:14px}
 .dirItem:hover{background:var(--panel2);border-color:var(--accent);color:var(--ink)}
 .treeRow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line)}
+/* ---- visual folder tree ---- */
+.tnode{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:7px;cursor:pointer;font-size:14px;transition:.12s}
+.tnode:hover{background:var(--panel2)}
+.tnode b{color:var(--ink)}
+.tcaret{display:inline-block;width:12px;color:var(--accent);transition:transform .15s;font-size:11px}
+.tfolder.collapsed>.tchildren{display:none}
+.tfolder.collapsed>.tnode .tcaret{transform:rotate(-90deg)}
+.tcount{color:var(--muted);font-size:12px}
+.tfile{display:flex;align-items:center;gap:6px;padding:3px 8px;color:var(--muted);font-size:13px}
+.tfile:hover{color:var(--ink)}
+.tdupflag{color:var(--warn);font-size:11px;font-weight:700}
 .bar{height:10px;background:var(--panel2);border:1px solid var(--line);border-radius:99px;overflow:hidden}
 .barFill{height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .4s;box-shadow:0 0 12px #19c3a5aa}
 /* ---- scanning HUD ---- */
@@ -279,6 +290,10 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
             <select id="profileSel" class="field" style="width:auto;margin:0">
               <option value="healthcare" selected>Healthcare</option>
               <option value="general">General</option>
+            </select>
+            <select id="layoutSel" class="field" style="width:auto;margin:0" title="How to structure the folders">
+              <option value="by-type" selected>By record type</option>
+              <option value="by-patient">By patient</option>
             </select>
             <select id="runModeSel" class="field" style="width:auto;margin:0" title="How hard to run">
               <option value="eco" selected>Eco (gentle)</option>
@@ -697,7 +712,7 @@ async function scanHere(){
     $('#scanProgress').classList.remove('hidden');
     $('#scanBar').style.width='0%'; $('#scanStat').textContent='starting…';
     const start=await jfetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({scope:s, root:CURDIR, profile, run_mode:runMode(), quality:false})}, 30000);
+      body:JSON.stringify({scope:s, root:CURDIR, profile, layout:$('#layoutSel').value, run_mode:runMode(), quality:false})}, 30000);
     if(start.error){ toast(start.error); $('#scanBtnO').textContent='Scan ▸'; $('#scanProgress').classList.add('hidden'); return; }
     await pollScan();
   }catch(e){ toast('scan failed: '+e.message); }
@@ -720,13 +735,48 @@ function pollScan(){
   });
 }
 
+// --- visual folder tree ---
+function _folderOf(p){
+  const dst=(p.dst||'').replace(/\\/g,'/');
+  const m=dst.match(/_(Organized|Duplicates_ForReview)\/(.*)/);
+  if(!m) return {segs:[p.category||'Other'], file:p.new_name||p.old_name};
+  const parts=m[2].split('/'); const file=parts.pop();
+  const segs=(m[1]==='Duplicates_ForReview'?['_Duplicates_ForReview']:[]).concat(parts);
+  return {segs, file};
+}
+function _countFiles(node){
+  let n=(node.files||[]).length;
+  for(const k in (node.dirs||{})) n+=_countFiles(node.dirs[k]);
+  return n;
+}
+function _treeNodeHtml(node, name, depth){
+  const cnt=_countFiles(node);
+  let inner='';
+  for(const d of Object.keys(node.dirs||{}).sort()) inner+=_treeNodeHtml(node.dirs[d], d, depth+1);
+  for(const f of (node.files||[])) inner+=`<div class="tfile" style="padding-left:${(depth+1)*18+4}px">📄 <span class="mono">${esc(f.name)}</span>${f.dup?' <span class="tdupflag">dup</span>':''}</div>`;
+  const pad=depth*18;
+  return `<div class="tfolder"><div class="tnode" style="padding-left:${pad}px" onclick="this.parentElement.classList.toggle('collapsed')">`
+    +`<span class="tcaret">▾</span>📁 <b>${esc(name)}</b> <span class="tcount">${cnt}</span></div>`
+    +`<div class="tchildren">${inner}</div></div>`;
+}
+function renderFolderTree(proposals){
+  const root={dirs:{},files:[]};
+  (proposals||[]).forEach(p=>{
+    const {segs,file}=_folderOf(p); let node=root;
+    segs.filter(Boolean).forEach(s=>{ node.dirs=node.dirs||{}; node.dirs[s]=node.dirs[s]||{dirs:{},files:[]}; node=node.dirs[s]; });
+    node.files=node.files||[]; node.files.push({name:file, dup:p.is_duplicate});
+  });
+  let html='<div class="tnode" style="opacity:.7"><span class="tcaret" style="visibility:hidden">▾</span>📂 <b>_Organized</b></div>';
+  for(const d of Object.keys(root.dirs).sort()) html+=_treeNodeHtml(root.dirs[d], d, 1);
+  return html || '<span class="rs">—</span>';
+}
+
 function renderPlan(r){
   $('#orgOut').classList.remove('hidden');
   $('#planNote').innerHTML = `${r.scanned} files scanned · ${r.duplicates.length} duplicate set(s)`
     + (r.capped? ` · <span style="color:var(--warn)">⚠ reached the ${r.cap}-file batch cap — run again after applying to continue through the rest</span>` : '');
-  // structure tree
-  $('#treePreview').innerHTML = Object.entries(r.tree_preview).sort().map(([k,v])=>
-    `<div class="treeRow"><span class="mono">${esc(k)}</span><span class="pill">${v}</span></div>`).join('') || '<span class="rs">—</span>';
+  // structure tree — visual, expandable, like a file explorer
+  $('#treePreview').innerHTML = renderFolderTree(r.proposals);
   $('#taxReason').innerHTML = '<small class="k">Why this structure:</small> '+esc(r.taxonomy_reason);
   $('#namingConv').innerHTML = '<small class="k">Naming:</small> <span class="mono">'+esc(r.naming_convention)+'</span>';
   // duplicates

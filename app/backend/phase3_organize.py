@@ -373,7 +373,8 @@ def _place(meta: dict, profile: str) -> tuple[str, str, str]:
 
 
 def build_plan(root: str, model: str, profile="healthcare", limit=200,
-               gate: "throttle.Gate | None" = None, progress=None) -> OrganizePlan:
+               layout="by-type", gate: "throttle.Gate | None" = None,
+               progress=None) -> OrganizePlan:
     files = inventory(root, limit)
     dup_groups, dup_paths = find_duplicates(files)
     cache: dict = {}
@@ -406,8 +407,15 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
                 confidence=1.0, quick_hash=quick_hash(fp), is_duplicate=True))
             continue
         cat, sub, base_name = _place(meta, profile)
+        patient_norm = normalize_patient(meta.get("patient"))
+        # folder parts depend on the chosen layout
+        if layout == "by-patient" and profile == "healthcare":
+            pfolder = patient_norm or "Unassigned"
+            parts = ["Patients", pfolder] + ([sub or cat] if (sub or cat) else [])
+        else:  # by-type
+            parts = [cat] + ([sub] if sub else [])
+        folder = "/".join(parts)
         new_name = base_name + fp.suffix.lower()
-        folder = f"{cat}/{sub}".rstrip("/")
         key = folder + "/" + new_name.lower()
         n = 1
         while key in used:
@@ -415,11 +423,9 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
             key = folder + "/" + new_name.lower()
             n += 1
         used.add(key)
-        dst = str(Path(root) / "_Organized" / cat / sub / new_name) if sub \
-            else str(Path(root) / "_Organized" / cat / new_name)
+        dst = str(Path(root) / "_Organized" / Path(*parts) / new_name)
         tree.setdefault(folder, 0)
         tree[folder] += 1
-        patient_norm = normalize_patient(meta.get("patient"))
         reason_bits = [meta.get("doc_type", ""), patient_norm, _clean_date(meta.get("doc_date"))]
         proposals.append(FileProposal(
             src=str(fp), dst=dst, old_name=fp.name, new_name=new_name,
@@ -433,15 +439,20 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
             "patient, and is self-describing so search finds it fast."
             if profile == "healthcare"
             else "YYYY-MM-DD_type_description.ext")
-    reason = (_taxonomy_reason(tree, profile, len(dup_groups)))
+    reason = (_taxonomy_reason(tree, profile, len(dup_groups), layout))
     return OrganizePlan(root=root, profile=profile, proposals=proposals,
                         tree_preview=tree, duplicates=dup_groups,
                         naming_convention=conv, taxonomy_reason=reason,
                         scanned=len(files), capped=len(files) >= limit, cap=limit)
 
 
-def _taxonomy_reason(tree: dict, profile: str, n_dupes: int) -> str:
-    if profile == "healthcare":
+def _taxonomy_reason(tree: dict, profile: str, n_dupes: int, layout="by-type") -> str:
+    if profile == "healthcare" and layout == "by-patient":
+        base = ("Grouped by PATIENT first, then by record type — the chart-per-"
+                "patient view a clinic pulls a whole record from. Under each patient: "
+                "Visit Notes, Labs, Imaging, Insurance, Billing. File names still lead "
+                "with the date so each patient's record reads chronologically.")
+    elif profile == "healthcare":
         base = ("Clinical vs. Administrative at the top level mirrors how a chart "
                 "is used at the point of care: clinicians reach for Visit Notes, "
                 "Labs, Imaging, Medications; front-office staff reach for Insurance, "
@@ -518,7 +529,8 @@ _SCAN: dict = {"thread": None, "done": 0, "total": 0, "state": "idle",
                "plan_obj": None, "error": None}
 
 
-def start_plan(root: str, model: str, profile: str, limit: int, mode: str = "eco") -> dict:
+def start_plan(root: str, model: str, profile: str, limit: int, mode: str = "eco",
+               layout: str = "by-type") -> dict:
     if _SCAN["thread"] and _SCAN["thread"].is_alive():
         return {"error": "a scan is already running"}
     _SCAN.update(done=0, total=0, state="running", plan_obj=None, error=None)
@@ -529,7 +541,7 @@ def start_plan(root: str, model: str, profile: str, limit: int, mode: str = "eco
             def prog(d, t):
                 _SCAN["done"], _SCAN["total"] = d, t
             plan = build_plan(root, model, profile=profile, limit=limit,
-                              gate=gate, progress=prog)
+                              layout=layout, gate=gate, progress=prog)
             _SCAN["plan_obj"] = plan
             _SCAN["state"] = "done"
         except Exception as e:            # never leave the UI hanging

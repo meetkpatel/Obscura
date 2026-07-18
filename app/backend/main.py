@@ -348,7 +348,7 @@ def organize_plan(body: dict = Body(...)):
         return JSONResponse({"error": f"not a folder: {root}"}, status_code=400)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
     return p3.start_plan(root, model, profile, body.get("limit", 200),
-                         body.get("run_mode", "eco"))
+                         body.get("run_mode", "eco"), body.get("layout", "by-type"))
 
 
 @app.get("/api/organize/plan_status")
