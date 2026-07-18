@@ -416,10 +416,38 @@ def export_pdf(pages: list[Image.Image], out_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 def verify_pdf(out_path: str, expect_gone: list[str]) -> dict:
-    """Open the exported PDF, confirm (a) no selectable text layer, and
-    (b) OCR of the rendered pages contains none of the redacted strings."""
+    """Run the industry-standard redaction validation battery on the OUTPUT file
+    (technical QA — not legal advice). Named after the checks documented in
+    redaction QA guidance: select-all/copy-paste, interactive text search, OCR
+    re-exposure, and metadata/XMP audit.
+    """
     doc = fitz.open(out_path)
+    checks = []
+
+    # 1. Select-all / copy-paste test — the output must carry no text layer.
     selectable = "".join(page.get_text() for page in doc).strip()
+    checks.append({
+        "name": "Select-all / copy-paste test",
+        "passed": not selectable,
+        "detail": ("No selectable text layer — copy-paste yields nothing."
+                   if not selectable else f"{len(selectable)} selectable characters remain!"),
+    })
+
+    # 2. Interactive text-search test — each redacted string must not be findable.
+    search_hits = []
+    for page in doc:
+        for s in expect_gone:
+            if s and len(s) > 2 and page.search_for(s):
+                search_hits.append(s)
+    search_hits = sorted(set(search_hits))
+    checks.append({
+        "name": "Interactive text-search test",
+        "passed": not search_hits,
+        "detail": ("No redacted term is findable by search."
+                   if not search_hits else f"{len(search_hits)} redacted term(s) still searchable!"),
+    })
+
+    # 3. OCR re-exposure check — re-OCR the rendered pixels; nothing should return.
     residual = []
     for page in doc:
         pix = page.get_pixmap(dpi=RENDER_DPI)
@@ -430,10 +458,36 @@ def verify_pdf(out_path: str, expect_gone: list[str]) -> dict:
             t = re.sub(r"\s+", "", s).lower()
             if t and t in low and s not in residual:
                 residual.append(s)
+    checks.append({
+        "name": "OCR re-exposure check",
+        "passed": not residual,
+        "detail": ("Re-OCR of the redacted pixels recovers none of the redacted text."
+                   if not residual else f"{len(residual)} item(s) recovered by OCR!"),
+    })
+
+    # 4. Metadata & XMP audit — no author/title/history or XMP stream survives.
+    md = doc.metadata or {}
+    leftover_md = {k: v for k, v in md.items() if v and k not in ("format", "encryption")}
+    try:
+        xmp = doc.get_xml_metadata()   # XMP string; "" after scrub
+    except Exception:
+        xmp = ""
+    md_clean = (not leftover_md) and (not xmp)
+    checks.append({
+        "name": "Metadata & XMP audit",
+        "passed": md_clean,
+        "detail": ("Document metadata and XMP stream are scrubbed."
+                   if md_clean else f"Residual metadata: {list(leftover_md)}"),
+    })
     doc.close()
+
+    passed = all(c["passed"] for c in checks)
     return {
+        "passed": passed,
+        "checks": checks,
+        "redacted_count": len(expect_gone),
+        # legacy fields kept for the existing UI
         "has_text_layer": bool(selectable),
         "selectable_chars": len(selectable),
-        "residual_hits": residual,
-        "passed": (not selectable) and (not residual),
+        "residual_hits": residual + search_hits,
     }

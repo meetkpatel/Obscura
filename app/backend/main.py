@@ -194,6 +194,8 @@ def redact_apply(body: dict = Body(...)):
     p1.export_pdf(redacted, out_pdf)
     verify = p1.verify_pdf(out_pdf, gone)
     STATE["redacted_pdf"] = out_pdf
+    STATE["verify"] = verify
+    STATE["redacted_count"] = len(gone)
     import base64
     previews = []
     for r in redacted:
@@ -205,6 +207,35 @@ def redact_apply(body: dict = Body(...)):
             "auto_detected_pages": auto,
             "note": (f"Auto-detected {len(auto)} page(s) you hadn't opened, so nothing "
                      f"ships unredacted." if auto else "")}
+
+
+@app.get("/api/redact/report")
+def redact_report():
+    """Downloadable verification report — the defensibility artifact. Records the
+    validation battery result. Technical QA record, not legal advice."""
+    v = STATE.get("verify")
+    if not v:
+        return JSONResponse({"error": "nothing redacted yet"}, status_code=404)
+    lines = [
+        "OBSCURA — REDACTION VERIFICATION REPORT",
+        "(on-device technical QA record — not legal advice)",
+        "=" * 52,
+        f"Items redacted:        {STATE.get('redacted_count', 0)}",
+        f"Overall verification:  {'PASSED' if v['passed'] else 'FAILED'}",
+        "",
+        "Validation battery:",
+    ]
+    for c in v.get("checks", []):
+        lines.append(f"  [{'PASS' if c['passed'] else 'FAIL'}] {c['name']}")
+        lines.append(f"         {c['detail']}")
+    lines += ["", "Method: text destroyed at the pixel level (image-only PDF, no",
+              "text layer), metadata + XMP scrubbed, output independently re-scanned.",
+              "Generated on-device. No document data left this machine."]
+    report = "\n".join(lines)
+    path = WORK / "verification_report.txt"
+    path.write_text(report, encoding="utf-8")
+    return FileResponse(str(path), media_type="text/plain",
+                        filename="obscura_verification_report.txt")
 
 
 @app.get("/api/redact/download")

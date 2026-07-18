@@ -364,13 +364,17 @@ async function doRedact(){
   const cv=$('#cv'),ctx=cv.getContext('2d'); const img=new Image();
   img.onload=()=>{cv.width=img.width;cv.height=img.height;ctx.drawImage(img,0,0);}; img.src=r.previews[CUR]||r.previews[0];
   const v=r.verify;
+  const battery=(v.checks||[]).map(c=>`<div class="rs" style="margin:3px 0">${c.passed?'✓':'⚠'} <b>${c.name}</b> — ${c.detail}</div>`).join('');
   $('#proof').innerHTML=`<div class="proofbox ${v.passed?'pass':''}">
-     <strong>${v.passed?'✓ Self-verification passed':'⚠ Residual detected'}</strong> —
-     ${r.redacted_count} items destroyed · text layer: ${v.has_text_layer?'PRESENT ⚠':'none'} ·
-     residual hits: ${v.residual_hits.length}
+     <strong>${v.passed?'✓ Verification passed — all checks':'⚠ Verification FAILED'}</strong>
+     · ${r.redacted_count} items destroyed
+     <div style="margin-top:8px">${battery}</div>
      <div style="margin-top:10px"><small class="k">Copy-paste test — try selecting the redacted values:</small>
      <div class="testarea" contenteditable="false">Name: ▉▉▉ · SSN: ▉▉▉ · (there is no text under the boxes)</div></div>
-     <a href="/api/redact/download" download><button class="ghost" style="margin-top:12px">Download redacted PDF</button></a></div>`;
+     <div class="flex" style="margin-top:12px">
+       <a href="/api/redact/download" download><button class="ghost">Download redacted PDF</button></a>
+       <a href="/api/redact/report" download><button class="ghost">Download verification report</button></a>
+     </div></div>`;
   checkEgress();
 }
 
