@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import re
 import json
+import difflib
 import subprocess
 import tempfile
 from pathlib import Path
@@ -221,27 +222,95 @@ def _box_from_words(ws: list[dict], hit: dict, pad_frac: float) -> Box:
               reason=hit.get("reason") or "Matched by deterministic rule.")
 
 
-def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06) -> list[Box]:
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", "", s).lower()
+
+
+# Fuzzy fallback acceptance floor. A Gemma-returned string or a hit that crosses
+# an OCR misread ("Srnith" for "Smith", "J0hn" for "John") won't match verbatim;
+# 0.82 is high enough to avoid grabbing an unrelated run but low enough to absorb
+# a handful of character-level OCR confusions in a name/address-length span.
+_FUZZY_FLOOR = 0.82
+
+
+def _ground_exact(hit: dict, target: str, words: list[dict], norm_words: list[str],
+                  claimed: set, boxes: list[Box], pad_frac: float) -> bool:
+    """Verbatim (whitespace-insensitive) grounding — the fast, precise path.
+    Emits a box for EVERY occurrence. Returns True if it placed at least one."""
+    placed = False
+    n = len(words)
+    for i in range(n):
+        acc, matched = "", []
+        for j in range(i, min(i + 16, n)):   # allow long spans (addresses)
+            acc += norm_words[j]
+            matched.append(words[j])
+            if target in acc:
+                if (hit["text"], i) not in claimed:
+                    claimed.add((hit["text"], i))
+                    boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
+                    placed = True
+                break
+            if len(acc) > len(target) + 6:
+                break
+    return placed
+
+
+def _ground_fuzzy(hit: dict, target: str, words: list[dict], norm_words: list[str],
+                  claimed: set, boxes: list[Box], pad_frac: float) -> bool:
+    """OCR-tolerant fallback for hits the exact pass couldn't place (Gemma
+    paraphrase, character misreads). Scans word runs of ~target length and keeps
+    the single best-matching window above the similarity floor. Boxes it emits
+    are marked lower-confidence with a [fuzzy] note so the reviewer sees why."""
+    best = None   # (ratio, start_index, matched_words)
+    n = len(words)
+    tlen = len(target)
+    for i in range(n):
+        acc, matched = "", []
+        for j in range(i, min(i + 16, n)):
+            acc += norm_words[j]
+            matched.append(words[j])
+            if len(acc) >= tlen * 0.7:
+                r = difflib.SequenceMatcher(None, acc, target).ratio()
+                if best is None or r > best[0]:
+                    best = (r, i, list(matched))
+            if len(acc) > tlen + 8:
+                break
+    if not best or best[0] < _FUZZY_FLOOR:
+        return False
+    ratio, i, matched = best
+    if (hit["text"], i) in claimed:
+        return True
+    claimed.add((hit["text"], i))
+    start = len(boxes)
+    boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
+    for b in boxes[start:]:
+        b.confidence = 0.80
+        b.reason = (b.reason or "").rstrip() + f" [fuzzy OCR match {ratio:.0%}]"
+    return True
+
+
+def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06,
+                      ungrounded: list[dict] | None = None) -> list[Box]:
     """Map each hit string to exact OCR word boxes. Handles multi-line spans
-    (wrapped addresses) by emitting one box per line segment. No grid drift."""
+    (wrapped addresses) by emitting one box per line segment. No grid drift.
+
+    Tries verbatim grounding first; if a hit can't be placed that way, falls
+    back to an OCR-tolerant fuzzy match. Any hit that STILL can't be located is
+    appended to `ungrounded` (when provided) so the caller can surface it — a
+    detected-but-unplaceable item is a silent miss otherwise, which for a
+    recall-biased redactor is the most dangerous failure mode."""
     boxes: list[Box] = []
     claimed: set[tuple[str, int]] = set()
+    norm_words = [_norm(w["text"]) for w in words]
     for hit in hits:
-        target = re.sub(r"\s+", "", hit["text"]).lower()
+        target = _norm(hit["text"])
         if len(target) < 2:
             continue
-        for i in range(len(words)):
-            acc, matched = "", []
-            for j in range(i, min(i + 16, len(words))):   # allow long spans (addresses)
-                acc += re.sub(r"\s+", "", words[j]["text"]).lower()
-                matched.append(words[j])
-                if target in acc:
-                    if (hit["text"], i) not in claimed:
-                        claimed.add((hit["text"], i))
-                        boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
-                    break
-                if len(acc) > len(target) + 6:
-                    break
+        placed = _ground_exact(hit, target, words, norm_words, claimed, boxes, pad_frac)
+        if not placed:
+            placed = _ground_fuzzy(hit, target, words, norm_words, claimed, boxes, pad_frac)
+        if not placed and ungrounded is not None:
+            ungrounded.append(hit)
     return boxes
 
 
@@ -312,7 +381,8 @@ QUASI_ID_PROMPT = (
 
 
 def gemma_text_entities(full_text: str, words: list[dict], model: str,
-                        presidio_on: bool = False) -> list[Box]:
+                        presidio_on: bool = False,
+                        ungrounded: list[dict] | None = None) -> list[Box]:
     """Ask Gemma for sensitive STRINGS, then OCR-ground each to exact pixel boxes.
     When Presidio ran (`presidio_on`), Gemma is narrowed to quasi-identifier /
     re-identification context; otherwise it does the full broad sweep so nothing
@@ -333,13 +403,16 @@ def gemma_text_entities(full_text: str, words: list[dict], model: str,
             cat = coerce_category(it.get("category", "other"))
             hits.append({"category": cat, "label": cat,
                          "text": t, "reason": it.get("reason", "")})
-    grounded = ground_text_boxes(hits, words)
-    # carry the model's reason onto the grounded box + mark provenance
+    grounded = ground_text_boxes(hits, words, ungrounded=ungrounded)
+    # carry the model's reason onto the grounded box + mark provenance. Leave
+    # fuzzy-grounded boxes' confidence/reason as-is so the [fuzzy] note survives.
     for b in grounded:
         b.source = "ocr_grounded"
-        b.confidence = 0.85
+        fuzzy = "[fuzzy" in (b.reason or "")
+        if not fuzzy:
+            b.confidence = 0.85
         for h in hits:
-            if h["text"] == b.text and h.get("reason"):
+            if h["text"] == b.text and h.get("reason") and not fuzzy:
                 b.reason = h["reason"]
     return grounded
 
@@ -427,9 +500,11 @@ def detect_page(img: Image.Image, model: str, use_vision=True,
     presidio_on = presidio_detect.available()
     presidio = presidio_detect.presidio_hits(full_text) if presidio_on else []
     hits = regex + presidio                         # structured PII + named entities
-    boxes = ground_text_boxes(hits, words)          # OCR-ground every hit to pixels
+    ungrounded: list[dict] = []                     # detected but couldn't be placed
+    boxes = ground_text_boxes(hits, words, ungrounded=ungrounded)  # OCR-ground to pixels
     if use_gemma_text:                              # quasi-identifier / re-id context
-        boxes += gemma_text_entities(full_text, words, model, presidio_on=presidio_on)
+        boxes += gemma_text_entities(full_text, words, model,
+                                     presidio_on=presidio_on, ungrounded=ungrounded)
     # Vision is for signatures/faces. Skip it on text-dense pages (signatures are
     # rare there and it's the slow part) — keeps the 12B path responsive.
     if use_vision and len(full_text) < 800:
@@ -440,10 +515,15 @@ def detect_page(img: Image.Image, model: str, use_vision=True,
     for b in boxes:
         b.x1, b.y1 = max(0, b.x1), max(0, b.y1)
         b.x2, b.y2 = min(W, b.x2), min(H, b.y2)
+    # Surface anything detected but not placeable — for a recall-biased tool a
+    # silent drop is worse than a visible "check this manually" warning.
+    ungrounded_texts = sorted({h["text"] for h in ungrounded})
     return DetectResult(
         page_width=W, page_height=H, boxes=boxes, full_text=full_text,
         stats={"regex_hits": len(regex), "presidio_hits": len(presidio),
-               "presidio": presidio_on, "words": len(words), "boxes": len(boxes)},
+               "presidio": presidio_on, "words": len(words), "boxes": len(boxes),
+               "ungrounded_count": len(ungrounded_texts),
+               "ungrounded": ungrounded_texts[:20]},
     )
 
 
