@@ -292,6 +292,13 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
       </div>
       <span class="rs" id="planNote"></span>
 
+      <!-- scan progress -->
+      <div class="panel hidden" id="scanProgress" style="margin-top:14px">
+        <strong>Step 2 · Reading first pages</strong>
+        <div class="bar" style="margin:10px 0"><div class="barFill" id="scanBar"></div></div>
+        <div class="rs mono" id="scanStat"></div>
+      </div>
+
       <!-- Step 1: existing structure (taxonomy) -->
       <div class="panel hidden" id="taxoPanel" style="margin-top:14px">
         <strong>Step 1 · Current structure</strong>
@@ -684,17 +691,33 @@ async function scanHere(){
     $('#taxoPanel').classList.remove('hidden');
     $('#taxoSummary').innerHTML=`<b>${t.total_files}</b> files across <b>${t.total_areas}</b> areas in <span class="mono">${esc(t.root)}</span>${t.truncated?' (sampled)':''}`;
     $('#taxoAreas').innerHTML=t.areas.map(a=>`<div class="treeRow"><span class="mono">${esc(a.area)}</span><span class="rs">${a.files} files · ${a.top_types.join(', ')}</span></div>`).join('');
-    // Step 2 — Gemma reads first pages and proposes the plan
+    // Step 2 — start the background scan (E4B by default: ~1.7x faster than 12B
+    // and just as accurate for filing) and show live per-file progress.
     $('#scanBtnO').innerHTML='<span class="spin"></span> Reading first pages…';
-    $('#planNote').textContent='Gemma is reading each file — one at a time.';
-    // ORGANIZE uses the fast E4B model by default: measured ~1.7x faster than 12B
-    // and just as accurate for filing classification. Lightweight by design.
-    const r=await jfetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({scope:s, root:CURDIR, profile, run_mode:runMode(), quality:false})}, 1800000);
-    if(r.error){ toast(r.error); $('#scanBtnO').textContent='Scan ▸'; return; }
-    renderPlan(r);
+    $('#scanProgress').classList.remove('hidden');
+    $('#scanBar').style.width='0%'; $('#scanStat').textContent='starting…';
+    const start=await jfetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({scope:s, root:CURDIR, profile, run_mode:runMode(), quality:false})}, 30000);
+    if(start.error){ toast(start.error); $('#scanBtnO').textContent='Scan ▸'; $('#scanProgress').classList.add('hidden'); return; }
+    await pollScan();
   }catch(e){ toast('scan failed: '+e.message); }
   $('#scanBtnO').textContent='Scan ▸';
+}
+let scanPoll=null;
+function pollScan(){
+  return new Promise(resolve=>{
+    clearInterval(scanPoll);
+    scanPoll=setInterval(async()=>{
+      try{
+        const st=await jfetch('/api/organize/plan_status',{},15000);
+        const pct=st.total? Math.round(st.done/st.total*100):0;
+        $('#scanBar').style.width=pct+'%';
+        $('#scanStat').textContent = st.total? `Reading first pages… ${st.done}/${st.total} files (${pct}%)` : 'preparing…';
+        if(st.state==='done'){ clearInterval(scanPoll); $('#scanProgress').classList.add('hidden'); renderPlan(st.plan); resolve(); }
+        else if(st.state==='error'){ clearInterval(scanPoll); $('#scanProgress').classList.add('hidden'); toast('scan failed: '+st.error); resolve(); }
+      }catch(e){ clearInterval(scanPoll); $('#scanProgress').classList.add('hidden'); toast('scan status failed: '+e.message); resolve(); }
+    }, 900);
+  });
 }
 
 function renderPlan(r){

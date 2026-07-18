@@ -339,16 +339,24 @@ def organize_taxonomy(body: dict = Body(default={})):
 
 @app.post("/api/organize/plan")
 def organize_plan(body: dict = Body(...)):
+    """Start the plan build as a BACKGROUND job so the UI can show live
+    per-file progress. Poll /api/organize/plan_status for progress + result."""
     root = _resolve_scope(body.get("scope", "folder"), body.get("root") or body.get("path"))
     quality = body.get("quality", False)
     profile = body.get("profile", "healthcare")
     if not root or not os.path.isdir(root):
         return JSONResponse({"error": f"not a folder: {root}"}, status_code=400)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    gate = p3.throttle.Gate(body.get("run_mode", "eco"))   # gentle during a big scan
-    plan = p3.build_plan(root, model, profile=profile, limit=body.get("limit", 200), gate=gate)
-    STATE["plan"] = plan
-    return plan.model_dump()
+    return p3.start_plan(root, model, profile, body.get("limit", 200),
+                         body.get("run_mode", "eco"))
+
+
+@app.get("/api/organize/plan_status")
+def organize_plan_status():
+    st = p3.plan_status()
+    if st.get("state") == "done" and p3._SCAN.get("plan_obj") is not None:
+        STATE["plan"] = p3._SCAN["plan_obj"]        # ready for apply
+    return st
 
 
 @app.post("/api/organize/apply")

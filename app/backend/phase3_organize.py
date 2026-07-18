@@ -327,6 +327,34 @@ def _clean_date(date: str) -> str:
     return m.group(1) if m else ""
 
 
+def normalize_patient(s: str) -> str:
+    """Order-stable canonical patient key. The model returns names in varying
+    order ('Kim-John' vs 'John-Kim' vs 'Kim, John') — we title-case the name
+    tokens and SORT them, so the same patient always yields the same string and
+    files into the same place. Consistency (one folder per patient) beats
+    guessing which token is the surname."""
+    toks = [t.capitalize() for t in re.split(r"[^A-Za-z]+", s or "") if t]
+    # drop obvious non-name filler the model sometimes emits
+    toks = [t for t in toks if t.lower() not in ("empty", "none", "unknown", "patient", "na")]
+    return "-".join(sorted(toks))[:40]
+
+
+def _confidence(meta: dict, profile: str) -> float:
+    """Deterministic confidence from what was actually extracted — far more
+    reliable than the model's self-reported score (E4B usually returns 0).
+    Rewards a recognized doc type + a found patient + a found date."""
+    dtype = (meta.get("doc_type") or "other").lower()
+    known = dtype in HC_DOCTYPES if profile == "healthcare" else dtype not in ("", "other")
+    c = 0.35
+    if known and dtype != "other":
+        c += 0.30
+    if normalize_patient(meta.get("patient")):
+        c += 0.20
+    if _clean_date(meta.get("doc_date")):
+        c += 0.15
+    return round(min(c, 0.99), 2)
+
+
 def _place(meta: dict, profile: str) -> tuple[str, str, str]:
     """Return (category, subcategory, new_name) from classified metadata.
     Every component is sanitized so filenames are always clean + searchable."""
@@ -336,7 +364,7 @@ def _place(meta: dict, profile: str) -> tuple[str, str, str]:
     if profile == "healthcare":
         cat, sub = HC_DOCTYPES.get((meta.get("doc_type") or "other").lower(),
                                    ("Administrative", "Other"))
-        patient = sanitize(meta.get("patient"), 30)
+        patient = normalize_patient(meta.get("patient"))   # order-stable per patient
         parts = [p for p in [date, patient, dtype, desc] if p]   # DATE_Patient_Type_desc
         return cat, sub, "_".join(parts)
     cat = meta.get("category", "Other") or "Other"
@@ -345,13 +373,17 @@ def _place(meta: dict, profile: str) -> tuple[str, str, str]:
 
 
 def build_plan(root: str, model: str, profile="healthcare", limit=200,
-               gate: "throttle.Gate | None" = None) -> OrganizePlan:
+               gate: "throttle.Gate | None" = None, progress=None) -> OrganizePlan:
     files = inventory(root, limit)
     dup_groups, dup_paths = find_duplicates(files)
     cache: dict = {}
     proposals: list[FileProposal] = []
     used: set[str] = set()
     tree: dict = {}
+    total = len(files)
+    done = 0
+    if progress:
+        progress(0, total)
     # Classify one file at a time. (Measured: batching multiple files into one
     # Gemma call is SLOWER on this hardware — the larger combined response costs
     # more than the per-call overhead it saves — so per-file wins. The real speed
@@ -362,6 +394,9 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
         is_dup = str(fp) in dup_paths
         meta = classify(fp, model, cache, profile) if not is_dup \
             else {"doc_type": "duplicate", "confidence": 1.0}
+        done += 1
+        if progress:
+            progress(done, total)
         if is_dup:
             dst = str(Path(root) / "_Duplicates_ForReview" / fp.name)
             proposals.append(FileProposal(
@@ -384,14 +419,14 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
             else str(Path(root) / "_Organized" / cat / new_name)
         tree.setdefault(folder, 0)
         tree[folder] += 1
-        reason_bits = [meta.get("doc_type", ""), meta.get("patient", ""),
-                       meta.get("doc_date", "")]
+        patient_norm = normalize_patient(meta.get("patient"))
+        reason_bits = [meta.get("doc_type", ""), patient_norm, _clean_date(meta.get("doc_date"))]
         proposals.append(FileProposal(
             src=str(fp), dst=dst, old_name=fp.name, new_name=new_name,
             category=cat, subcategory=sub, doc_type=meta.get("doc_type", ""),
-            patient=meta.get("patient", ""), topic=meta.get("descriptor", ""),
+            patient=patient_norm, topic=meta.get("descriptor", ""),
             reason=" · ".join([b for b in reason_bits if b]) or "classified from first page",
-            confidence=float(meta.get("confidence", 0.5) or 0.5),
+            confidence=_confidence(meta, profile),
             quick_hash=meta.get("_qh", ""), is_duplicate=False))
     proposals.sort(key=lambda p: (p.is_duplicate, p.confidence))
     conv = ("YYYY-MM-DD_Patient_DocType_description.ext — sorts by date, groups by "
@@ -476,8 +511,46 @@ def apply_plan(plan: OrganizePlan, journal_path: str) -> dict:
             "map": [{"from": e["src"], "to": e["dst"]} for e in entries if e["committed"]]}
 
 
-# --- Background, throttled, idle-aware apply job -------------------------------
 import threading
+
+# --- Background SCAN job (so the plan build shows live progress) ---------------
+_SCAN: dict = {"thread": None, "done": 0, "total": 0, "state": "idle",
+               "plan_obj": None, "error": None}
+
+
+def start_plan(root: str, model: str, profile: str, limit: int, mode: str = "eco") -> dict:
+    if _SCAN["thread"] and _SCAN["thread"].is_alive():
+        return {"error": "a scan is already running"}
+    _SCAN.update(done=0, total=0, state="running", plan_obj=None, error=None)
+
+    def work():
+        try:
+            gate = throttle.Gate(mode)
+            def prog(d, t):
+                _SCAN["done"], _SCAN["total"] = d, t
+            plan = build_plan(root, model, profile=profile, limit=limit,
+                              gate=gate, progress=prog)
+            _SCAN["plan_obj"] = plan
+            _SCAN["state"] = "done"
+        except Exception as e:            # never leave the UI hanging
+            _SCAN["error"] = str(e)
+            _SCAN["state"] = "error"
+
+    t = threading.Thread(target=work, daemon=True)
+    _SCAN["thread"] = t
+    t.start()
+    return {"started": True}
+
+
+def plan_status() -> dict:
+    st = {"state": _SCAN["state"], "done": _SCAN["done"], "total": _SCAN["total"],
+          "error": _SCAN["error"]}
+    if _SCAN["state"] == "done" and _SCAN["plan_obj"] is not None:
+        st["plan"] = _SCAN["plan_obj"].model_dump()
+    return st
+
+
+# --- Background, throttled, idle-aware apply job -------------------------------
 
 _JOB: dict = {"thread": None, "gate": None, "total": 0, "done": 0, "moved": 0,
               "skipped": [], "state": "idle", "journal": ""}
