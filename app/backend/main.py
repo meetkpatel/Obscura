@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import gemma
+import hardware
 import phase1_redact as p1
 import phase2_secure as p2
 import phase3_organize as p3
@@ -41,6 +42,33 @@ def health():
     h = gemma.health()
     h["admin"] = p2.is_admin()
     return h
+
+
+@app.post("/api/warmup")
+def warmup(body: dict = Body(default={})):
+    """Pre-load a model into VRAM so the FIRST real request isn't slowed by a
+    cold load (evicting the other model + loading 12B can take ~15-20s on an
+    8GB card). Called when the user picks a model in the UI."""
+    model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
+    try:
+        gemma.generate("ok", model=model, num_predict=1, timeout=120)
+        return {"ready": True, "model": model}
+    except gemma.GemmaError as e:
+        return {"ready": False, "model": model, "error": str(e)}
+
+
+@app.get("/api/hardware")
+def hardware_probe():
+    """Detect this machine and recommend a Gemma 4 model (offer 12B if capable)."""
+    hw = hardware.probe()
+    tags = gemma.health()
+    # only offer 12B if the hardware can take it AND the model is actually pulled
+    hw["twelve_b_present"] = tags.get("quality_present", False)
+    hw["e4b_present"] = tags.get("fast_present", False)
+    if hw["recommended_model"] == gemma.QUALITY_MODEL and not hw["twelve_b_present"]:
+        hw["recommended_model"] = gemma.FAST_MODEL
+        hw["reason"] += " (12B not pulled yet — run `ollama pull gemma4:12b-it-qat` to enable.)"
+    return hw
 
 
 @app.get("/api/egress")
@@ -78,12 +106,33 @@ def egress() -> EgressReport:
 # Phase 1 — REDACT
 # --------------------------------------------------------------------------
 
-@app.post("/api/redact/detect")
-async def redact_detect(file: UploadFile = File(...),
-                        quality: bool = False):
-    """Always returns JSON. A slow/failed page keeps its deterministic (regex+OCR)
-    boxes and just skips the Gemma passes — never an HTML 500."""
+def _img_data_url(pg) -> str:
     import base64
+    buf = io.BytesIO(); pg.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _detect_one(i: int, model: str):
+    """Detect a single page (i, 0-based) into STATE['detect'][i]. One page at a
+    time keeps the small model focused. Falls back to deterministic-only rather
+    than failing. Returns (DetectResult, gemma_skipped_bool)."""
+    pg = STATE["pages"][i]
+    try:
+        res = p1.detect_page(pg, model)
+        return res, False
+    except Exception as e:
+        try:
+            res = p1.detect_page(pg, model, use_vision=False, use_gemma_text=False)
+            return res, True
+        except Exception:
+            return p1.DetectResult(page_width=pg.size[0], page_height=pg.size[1],
+                                   boxes=[], full_text="", stats={"error": str(e)[:120]}), True
+
+
+@app.post("/api/redact/load")
+async def redact_load(file: UploadFile = File(...)):
+    """Upload + render pages ONLY (no detection yet). Detection runs per-page,
+    on demand, so a small model handles one page at a time."""
     try:
         raw = await file.read()
         src = WORK / f"in_{Path(file.filename).name}"
@@ -92,45 +141,47 @@ async def redact_detect(file: UploadFile = File(...),
     except Exception as e:
         return JSONResponse(
             {"error": f"Could not open '{file.filename}': {type(e).__name__}: {e}. "
-                      f"Encrypted or unsupported PDFs may need to be re-saved/printed to PDF first."},
+                      f"Encrypted/unsupported PDFs may need to be re-saved or printed to PDF first."},
             status_code=200)
-
-    model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    results, out, skipped = [], [], []
-    for i, pg in enumerate(pages):
-        try:
-            res = p1.detect_page(pg, model)
-        except Exception as e:  # last-resort: deterministic-only for this page
-            try:
-                res = p1.detect_page(pg, model, use_vision=False, use_gemma_text=False)
-                skipped.append(i + 1)
-            except Exception:
-                res = p1.DetectResult(page_width=pg.size[0], page_height=pg.size[1],
-                                      boxes=[], full_text="", stats={"error": str(e)[:120]})
-                skipped.append(i + 1)
-        results.append(res)
-        buf = io.BytesIO(); pg.save(buf, "PNG")
-        out.append({
-            "image": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
-            "width": res.page_width, "height": res.page_height,
-            "boxes": [b.model_dump() for b in res.boxes],
-            "stats": res.stats,
-        })
     STATE["pages"] = pages
-    STATE["detect"] = results
-    return {"pages": out, "page_count": len(pages),
-            "gemma_skipped_pages": skipped,
-            "note": (f"{len(skipped)} page(s) used deterministic detection only "
-                     f"(Gemma slow/unavailable on those pages)." if skipped else "")}
+    STATE["detect"] = [None] * len(pages)
+    return {"page_count": len(pages),
+            "pages": [{"image": _img_data_url(pg), "width": pg.size[0], "height": pg.size[1]}
+                      for pg in pages]}
+
+
+@app.post("/api/redact/detect_page")
+def redact_detect_page(body: dict = Body(...)):
+    """Detect ONE page. body = {index, quality}. Cached in STATE."""
+    pages = STATE.get("pages") or []
+    i = int(body.get("index", 0))
+    if not (0 <= i < len(pages)):
+        return JSONResponse({"error": "page index out of range"}, status_code=200)
+    model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
+    res, skipped = _detect_one(i, model)
+    STATE["detect"][i] = res
+    return {"index": i, "boxes": [b.model_dump() for b in res.boxes],
+            "stats": res.stats, "gemma_skipped": skipped,
+            "note": ("This page used deterministic detection only (Gemma slow/unavailable)."
+                     if skipped else "")}
 
 
 @app.post("/api/redact/apply")
-def redact_apply(decisions: dict = Body(...)):
-    """decisions = {page_index: [accepted_bool,...]}. Burn, flatten, scrub, verify."""
-    pages = STATE["pages"]
-    results = STATE["detect"]
+def redact_apply(body: dict = Body(...)):
+    """body = {decisions:{page_index:[bool,...]}, quality:bool}. Any page not yet
+    detected is detected now (so nothing ships unredacted). Burn, flatten, scrub, verify."""
+    pages = STATE.get("pages") or []
     if not pages:
-        return JSONResponse({"error": "no document detected yet"}, status_code=400)
+        return JSONResponse({"error": "no document loaded yet"}, status_code=400)
+    decisions = body.get("decisions", {}) if isinstance(body, dict) else {}
+    model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
+    # auto-detect any page the reviewer never opened — recall safety
+    auto = []
+    for i in range(len(pages)):
+        if STATE["detect"][i] is None:
+            STATE["detect"][i], _ = _detect_one(i, model)
+            auto.append(i + 1)
+    results = STATE["detect"]
     redacted, gone = [], []
     for i, (pg, res) in enumerate(zip(pages, results)):
         acc = decisions.get(str(i)) or decisions.get(i) or [b.accepted for b in res.boxes]
@@ -143,6 +194,8 @@ def redact_apply(decisions: dict = Body(...)):
     p1.export_pdf(redacted, out_pdf)
     verify = p1.verify_pdf(out_pdf, gone)
     STATE["redacted_pdf"] = out_pdf
+    STATE["verify"] = verify
+    STATE["redacted_count"] = len(gone)
     import base64
     previews = []
     for r in redacted:
@@ -150,7 +203,39 @@ def redact_apply(decisions: dict = Body(...)):
         previews.append("data:image/png;base64," + base64.b64encode(buf.getvalue()).decode())
     return {"verify": verify, "previews": previews,
             "download": "/api/redact/download",
-            "redacted_count": len(gone)}
+            "redacted_count": len(gone),
+            "auto_detected_pages": auto,
+            "note": (f"Auto-detected {len(auto)} page(s) you hadn't opened, so nothing "
+                     f"ships unredacted." if auto else "")}
+
+
+@app.get("/api/redact/report")
+def redact_report():
+    """Downloadable verification report — the defensibility artifact. Records the
+    validation battery result. Technical QA record, not legal advice."""
+    v = STATE.get("verify")
+    if not v:
+        return JSONResponse({"error": "nothing redacted yet"}, status_code=404)
+    lines = [
+        "OBSCURA — REDACTION VERIFICATION REPORT",
+        "(on-device technical QA record — not legal advice)",
+        "=" * 52,
+        f"Items redacted:        {STATE.get('redacted_count', 0)}",
+        f"Overall verification:  {'PASSED' if v['passed'] else 'FAILED'}",
+        "",
+        "Validation battery:",
+    ]
+    for c in v.get("checks", []):
+        lines.append(f"  [{'PASS' if c['passed'] else 'FAIL'}] {c['name']}")
+        lines.append(f"         {c['detail']}")
+    lines += ["", "Method: text destroyed at the pixel level (image-only PDF, no",
+              "text layer), metadata + XMP scrubbed, output independently re-scanned.",
+              "Generated on-device. No document data left this machine."]
+    report = "\n".join(lines)
+    path = WORK / "verification_report.txt"
+    path.write_text(report, encoding="utf-8")
+    return FileResponse(str(path), media_type="text/plain",
+                        filename="obscura_verification_report.txt")
 
 
 @app.get("/api/redact/download")

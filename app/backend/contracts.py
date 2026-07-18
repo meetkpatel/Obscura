@@ -14,9 +14,22 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 Category = Literal[
-    "person", "contact", "financial", "medical", "gov_id", "signature",
-    "face", "address", "date", "other",
+    "person", "organization", "contact", "financial", "medical", "gov_id",
+    "signature", "face", "address", "date", "other",
 ]
+
+# Any model-emitted category outside the set above is coerced to this.
+def coerce_category(c: str) -> str:
+    valid = {"person", "organization", "contact", "financial", "medical",
+             "gov_id", "signature", "face", "address", "date", "other"}
+    c = (c or "other").strip().lower()
+    # common synonyms the model may produce
+    alias = {"org": "organization", "company": "organization",
+             "employer": "organization", "name": "person", "phone": "contact",
+             "email": "contact", "ssn": "gov_id", "id": "gov_id",
+             "dob": "date", "account": "financial", "money": "financial"}
+    c = alias.get(c, c)
+    return c if c in valid else "other"
 
 # How a box's coordinates were established — drives trust + padding policy.
 Source = Literal["regex", "ocr_grounded", "gemma_vision"]

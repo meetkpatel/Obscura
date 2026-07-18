@@ -28,9 +28,46 @@ QUALITY_MODEL = "gemma4:12b-it-qat"
 
 _LOCK = threading.Lock()  # serialize model calls — one GPU, one worker
 
+# Gemma 4 (esp. the small E4B) can fall into a degenerate repetition loop
+# ("protect-less protect-less protect-less…"). repeat_penalty + a hard output
+# sanitizer defend against it. See collapse_repeats().
+REPEAT_PENALTY = 1.3
+
 
 class GemmaError(RuntimeError):
     pass
+
+
+def collapse_repeats(text: str, max_run: int = 4) -> str:
+    """Kill runaway repetition from a degenerate generation. Collapses any word
+    or short phrase repeated more than `max_run` times in a row."""
+    if not text:
+        return text
+    # collapse a single word repeated many times: "a a a a a a" -> "a"
+    words = text.split()
+    out, i = [], 0
+    while i < len(words):
+        # try phrase lengths 1..4
+        cut = False
+        for plen in (1, 2, 3):
+            phrase = words[i:i + plen]
+            if len(phrase) < plen:
+                continue
+            runs = 1
+            j = i + plen
+            while words[j:j + plen] == phrase:
+                runs += 1
+                j += plen
+            if runs > max_run:
+                out.extend(phrase)          # keep one copy
+                i = j
+                cut = True
+                break
+        if not cut:
+            out.append(words[i])
+            i += 1
+    cleaned = " ".join(out)
+    return cleaned[:600]  # belt-and-suspenders length cap
 
 
 def _post(payload: dict, timeout: int) -> dict:
@@ -72,6 +109,7 @@ def generate(
             "temperature": 0,
             "num_ctx": num_ctx,
             "num_predict": num_predict,
+            "repeat_penalty": REPEAT_PENALTY,
         },
     }
     if images:
@@ -107,6 +145,7 @@ def generate_json(
                 "temperature": 0,
                 "num_ctx": num_ctx_for(prompt),
                 "num_predict": num_predict,
+                "repeat_penalty": REPEAT_PENALTY,
             },
         }
         if images:
