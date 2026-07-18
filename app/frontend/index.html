@@ -132,6 +132,11 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
           </div>
         </div>
       </div>
+      <div class="flex" style="justify-content:space-between;margin-bottom:12px">
+        <span class="rs">Try <span class="mono">demo-data/sample-medical.png</span> (patient record)</span>
+        <button class="ghost" onclick="showHipaa()" style="padding:7px 14px;font-size:13px">HIPAA Safe Harbor coverage ▸</button>
+      </div>
+      <div class="panel hidden" id="hipaaPanel" style="margin-bottom:16px"></div>
       <div class="drop" id="drop" onclick="document.getElementById('fi').click()">
         <div style="font-size:17px">Drop a PDF or image here, or click to choose</div>
         <div style="margin-top:6px">Try <span class="mono">demo-data/sample-foia.png</span></div>
@@ -400,6 +405,26 @@ async function doScan(){
   $('#scanBtn').textContent='Run scan';
 }
 function sendToRedactor(path){ tab('redact'); toast('Loaded '+path+' into Redactor (demo: drop the file to redact it).'); }
+
+async function showHipaa(){
+  const p=$('#hipaaPanel'); p.classList.toggle('hidden');
+  if(p.classList.contains('hidden')) return;
+  p.innerHTML='<div class="rs"><span class="spin"></span> checking coverage…</div>';
+  try{
+    const h=await jfetch('/api/redact/hipaa',{},30000);
+    const rows=h.identifiers.map(i=>`<tr>
+      <td class="mono">${i.code}</td><td>${i.identifier}</td>
+      <td class="rs">${i.detection}</td>
+      <td>${i.found_on_document?'<span style="color:var(--accent)">● on this doc</span>':'<span class="rs">—</span>'}</td></tr>`).join('');
+    p.innerHTML=`<div class="flex" style="justify-content:space-between"><strong>${h.standard}</strong>
+      <span class="rs">18/18 identifiers targeted</span></div>
+      <div class="proofbox" style="margin:10px 0"><small class="k">⚠ ${h.disclaimer}</small></div>
+      <div style="max-height:40vh;overflow:auto"><table>
+      <thead><tr><th></th><th>Identifier</th><th>How Obscura detects it</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <div class="rs" style="margin-top:8px">${h.note_on_dates_zip}</div>`;
+  }catch(e){ p.innerHTML='<div class="proofbox">⚠ '+e.message+'</div>'; }
+}
 
 /* ---------- ORGANIZE ---------- */
 async function doPlan(){

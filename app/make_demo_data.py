@@ -88,8 +88,39 @@ def messy():
     print(f"wrote {len(files)} files to", DD / "messy")
 
 
+def sample_medical():
+    """Synthetic patient record (no real PHI) — exercises HIPAA identifiers."""
+    W, H = 1000, 1294
+    img = Image.new("RGB", (W, H), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 70], fill=(30, 90, 80))
+    d.text((40, 24), "VALLEY COMMUNITY CLINIC — PATIENT VISIT SUMMARY (DEMO)", font=font(20), fill="white")
+    lines = [
+        ("Patient: Maria L. Gonzalez", 130),
+        ("Date of Birth: 08/17/1962", 165),
+        ("Medical Record Number: MRN 4471982", 200),
+        ("Member ID: BCBS-5521-887-01", 235),
+        ("Insurance: Blue Shield  Group No. 88231", 270),
+        ("Address: 415 Oak Street, Apt 3, Fresno, CA 93706", 305),
+        ("Phone: (559) 555-0148   Email: mgonzalez@example.com", 340),
+        ("SSN: 602-55-8123", 375),
+        ("Provider: Dr. Aaron Whitfield, NPI 1780654321", 410),
+        ("Date of Service: 05/22/2026", 445),
+        ("", 480),
+        ("ASSESSMENT:", 515),
+        ("Patient presents with Type 2 diabetes, well controlled.", 550),
+        ("Portal: https://valleyclinic.example.com/patient/4471982", 585),
+        ("Follow-up in 3 months.", 620),
+    ]
+    for t, y in lines:
+        d.text((45, y), t, font=font(20), fill=(15, 15, 15))
+    img.save(DD / "sample-medical.png")
+    print("wrote", DD / "sample-medical.png")
+
+
 if __name__ == "__main__":
     sample_doc()
+    sample_medical()
     leaked_creds()
     messy()
     print("\nDemo data ready in", DD)
