@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pymupdf
+pillow
+psutil
+json-repair
+# External: Ollama >= 0.22 with gemma4:e4b-it-qat and gemma4:12b-it-qat pulled.
+# External: Tesseract OCR on PATH (standard mode; used for coordinate grounding).

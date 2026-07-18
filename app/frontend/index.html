@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Obscura — nothing leaves the room</title>
+<style>
+/* Offline by design: zero external fonts, scripts, or styles. */
+:root{
+  --bg:#0a0e14; --panel:#111823; --panel2:#161f2e; --line:#22304a;
+  --ink:#e8eef7; --muted:#8296b3; --accent:#19c3a5; --accent2:#0e8f7c;
+  --warn:#f2b544; --crit:#ff5c6c; --ok:#19c3a5;
+  --shadow:0 10px 40px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#12203099,transparent),var(--bg);
+  color:var(--ink);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+button{font:inherit;cursor:pointer;border:none;border-radius:10px;padding:11px 18px;
+  background:var(--accent);color:#052019;font-weight:650;transition:.15s}
+button:hover{background:var(--accent2)}
+button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+button.ghost:hover{color:var(--ink);border-color:var(--accent)}
+button:disabled{opacity:.4;cursor:not-allowed}
+.badge{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;
+  background:#0d2b26;color:var(--accent);font-size:13px;font-weight:600;border:1px solid #124a41}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+
+/* ---- login ---- */
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(900px 500px at 50% 0%,#10202e,transparent),var(--bg);z-index:50}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:38px;
+  width:380px;box-shadow:var(--shadow)}
+.logo{font-size:30px;font-weight:800;letter-spacing:-.5px}
+.logo span{color:var(--accent)}
+.tag{color:var(--muted);margin:6px 0 26px;font-size:15px}
+.field{width:100%;padding:12px 14px;margin-bottom:12px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit}
+.field:focus{outline:none;border-color:var(--accent)}
+
+/* ---- app shell ---- */
+#app{display:none;min-height:100vh}
+header{display:flex;align-items:center;gap:18px;padding:16px 26px;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:#0a0e14ee;backdrop-filter:blur(8px);z-index:10}
+header .logo{font-size:20px}
+.tabs{display:flex;gap:6px;margin-left:8px}
+.tab{padding:9px 18px;border-radius:10px;color:var(--muted);font-weight:600;cursor:pointer;border:1px solid transparent}
+.tab.active{color:var(--ink);background:var(--panel);border-color:var(--line)}
+.spacer{flex:1}
+main{padding:26px;max-width:1180px;margin:0 auto}
+.view{display:none}.view.active{display:block}
+h2{margin:0 0 4px;font-size:24px}
+.sub{color:var(--muted);margin:0 0 22px}
+.grid{display:grid;gap:18px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+.drop{border:2px dashed var(--line);border-radius:14px;padding:44px;text-align:center;color:var(--muted);
+  transition:.15s;cursor:pointer}
+.drop:hover,.drop.over{border-color:var(--accent);color:var(--ink);background:#0d1a2488}
+.row{display:flex;gap:18px;align-items:flex-start}
+.col{flex:1;min-width:0}
+canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background:#000}
+.item{display:flex;gap:10px;align-items:flex-start;padding:11px;border:1px solid var(--line);
+  border-radius:10px;margin-bottom:9px;background:var(--panel2)}
+.item .lab{font-weight:650}
+.item .rs{color:var(--muted);font-size:13px}
+.chip{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:700;text-transform:uppercase}
+.c-person{background:#1b2b4d;color:#7fa8ff}.c-gov_id,.c-financial{background:#3d1b28;color:#ff8fa0}
+.c-contact,.c-address,.c-date{background:#123b34;color:#5fe6c8}.c-signature,.c-face,.c-other,.c-medical{background:#2c2340;color:#c59bff}
+.score{font-size:64px;font-weight:800;line-height:1}
+.sev{font-weight:700}.sev-critical{color:var(--crit)}.sev-high{color:#ff9a5c}.sev-medium{color:var(--warn)}.sev-low{color:var(--muted)}
+.pill{display:inline-block;padding:3px 9px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);font-size:12px;color:var(--muted);margin-right:6px}
+.mono{font-family:Consolas,Menlo,monospace;font-size:13px}
+.proofbox{padding:14px;border-radius:10px;border:1px solid var(--line);background:#08130f;color:var(--muted)}
+.proofbox.pass{border-color:var(--ok);color:var(--ok);background:#08150f}
+.testarea{user-select:text;padding:12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted)}
+.hidden{display:none}
+.spin{display:inline-block;width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);
+  border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel);
+  border:1px solid var(--line);padding:12px 20px;border-radius:10px;box-shadow:var(--shadow);z-index:60;display:none}
+small.k{color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600}
+input[type=text]{background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:9px 12px;font:inherit;width:100%}
+.flex{display:flex;gap:10px;align-items:center}
+</style>
+</head>
+<body>
+
+<!-- LOGIN (mock) -->
+<div id="login">
+  <div class="card">
+    <div class="logo">OBS<span>CURA</span></div>
+    <div class="tag">Redaction that never leaves the room.</div>
+    <input class="field" id="email" placeholder="officer@agency.gov" value="dana@records.gov">
+    <input class="field" id="pw" type="password" placeholder="••••••••" value="demo">
+    <button style="width:100%" onclick="signIn()">Sign in</button>
+    <div style="text-align:center;margin-top:14px"><span class="badge"><span class="dot"></span>On-device · No network</span></div>
+    <button class="ghost" style="width:100%;margin-top:12px" disabled>SSO (coming soon)</button>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header>
+    <div class="logo">OBS<span>CURA</span></div>
+    <div class="tabs">
+      <div class="tab active" data-v="redact" onclick="tab('redact')">REDACT</div>
+      <div class="tab" data-v="secure" onclick="tab('secure')">SECURE</div>
+      <div class="tab" data-v="organize" onclick="tab('organize')">ORGANIZE</div>
+    </div>
+    <div class="spacer"></div>
+    <span class="badge" id="egressBadge" onclick="checkEgress()" style="cursor:pointer"><span class="dot"></span><span id="egressText">On-device · No network</span></span>
+    <span class="pill mono" id="modelPill">gemma4</span>
+  </header>
+
+  <main>
+    <!-- REDACT -->
+    <section class="view active" id="v-redact">
+      <h2>Redact a document</h2>
+      <p class="sub">Gemma 4 + deterministic rules find every sensitive item, on this laptop. You approve. We destroy the pixels — no recoverable text layer.</p>
+      <div class="drop" id="drop" onclick="document.getElementById('fi').click()">
+        <div style="font-size:17px">Drop a PDF or image here, or click to choose</div>
+        <div style="margin-top:6px">Try <span class="mono">demo-data/sample-foia.png</span></div>
+        <input type="file" id="fi" class="hidden" accept=".pdf,.png,.jpg,.jpeg" onchange="onFile(this.files[0])">
+      </div>
+      <div id="redactWork" class="hidden" style="margin-top:20px">
+        <div class="row">
+          <div class="col panel">
+            <div class="flex" style="justify-content:space-between;margin-bottom:10px">
+              <strong>Document</strong>
+              <label class="flex" style="font-size:13px;color:var(--muted)"><input type="checkbox" id="qmode"> quality mode (12B)</label>
+            </div>
+            <canvas id="cv"></canvas>
+            <div style="margin-top:12px" id="proof"></div>
+          </div>
+          <div class="col panel" style="max-width:420px">
+            <div class="flex" style="justify-content:space-between;margin-bottom:10px">
+              <strong>Detected items</strong><span class="rs" id="detCount"></span>
+            </div>
+            <div id="items" style="max-height:52vh;overflow:auto"></div>
+            <button style="width:100%;margin-top:12px" id="redactBtn" onclick="doRedact()">Redact &amp; Export</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECURE -->
+    <section class="view" id="v-secure">
+      <h2>Secure this machine</h2>
+      <p class="sub">A read-only, on-device scan for exposure — secrets in plaintext, weak configuration, risky ports. Gemma explains each finding. Nothing is changed without your click.</p>
+      <button onclick="doScan()" id="scanBtn">Run scan</button>
+      <span class="rs" id="scanNote" style="margin-left:12px"></span>
+      <div id="scanOut" class="hidden" style="margin-top:20px">
+        <div class="row">
+          <div class="panel" style="text-align:center;min-width:220px">
+            <div class="rs">Safety Score</div>
+            <div class="score" id="scoreVal">–</div>
+            <div class="rs" id="scoreBreak" style="margin-top:8px"></div>
+          </div>
+          <div class="col panel">
+            <strong>Findings</strong>
+            <div id="findings" style="margin-top:12px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ORGANIZE -->
+    <section class="view" id="v-organize">
+      <h2>Organize the filesystem</h2>
+      <p class="sub">Gemma reads each file and proposes a clean structure and names. Nothing moves until you Apply — and one click Undoes everything.</p>
+      <div class="flex">
+        <input type="text" id="orgRoot" placeholder="C:\Users\you\Downloads\messy-folder">
+        <button onclick="doPlan()" id="planBtn" style="white-space:nowrap">Build plan</button>
+      </div>
+      <span class="rs" id="planNote"></span>
+      <div id="orgOut" class="hidden" style="margin-top:20px">
+        <div class="panel">
+          <div class="flex" style="justify-content:space-between">
+            <strong>Proposed renames &amp; moves</strong>
+            <div class="flex">
+              <button class="ghost" onclick="doUndo()" id="undoBtn">Undo</button>
+              <button onclick="doApply()" id="applyBtn">Apply</button>
+            </div>
+          </div>
+          <div id="treePreview" class="rs" style="margin:8px 0"></div>
+          <div style="max-height:56vh;overflow:auto;margin-top:8px">
+            <table id="orgTable"><thead><tr><th></th><th>Current</th><th>Proposed</th><th>Why</th><th>Conf.</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+let PAGES=[], DET=[];
+
+function signIn(){ document.getElementById('login').style.display='none';
+  document.getElementById('app').style.display='block'; health(); }
+function tab(v){ $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===v));
+  $$('.view').forEach(x=>x.classList.remove('active')); $('#v-'+v).classList.add('active'); }
+function toast(m){ const t=$('#toast'); t.textContent=m; t.style.display='block'; setTimeout(()=>t.style.display='none',2600); }
+function q(){ return $('#qmode') && $('#qmode').checked; }
+
+async function health(){
+  try{ const h=await (await fetch('/api/health')).json();
+    $('#modelPill').textContent = h.fast_present? h.fast_model : 'MODEL MISSING';
+    if(!h.ok) toast('Ollama not reachable — start `ollama serve`');
+  }catch(e){ toast('backend not reachable'); }
+}
+async function checkEgress(){
+  const e=await (await fetch('/api/egress')).json();
+  const b=$('#egressBadge'), t=$('#egressText');
+  t.textContent = e.external_count===0 ? 'External connections: 0 ✓' : ('EXTERNAL: '+e.external_count+' ⚠');
+  b.style.borderColor = e.external_count===0? '#124a41':'#5a1e26';
+  toast(e.verdict);
+}
+
+/* ---------- REDACT ---------- */
+const drop=$('#drop');
+;['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over')}));
+;['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
+
+async function onFile(f){
+  if(!f) return;
+  $('#redactWork').classList.remove('hidden');
+  $('#items').innerHTML='<div class="rs"><span class="spin"></span> Gemma is reading the document…</div>';
+  const fd=new FormData(); fd.append('file',f);
+  try{
+    const r=await (await fetch('/api/redact/detect?quality='+(q()?1:0),{method:'POST',body:fd})).json();
+    PAGES=r.pages; DET=r.pages.map(p=>p.boxes); renderPage(0);
+  }catch(e){ $('#items').innerHTML='<div class="rs">Detection failed: '+e+'</div>'; }
+}
+
+function renderPage(i){
+  const p=PAGES[i]; const cv=$('#cv'), ctx=cv.getContext('2d');
+  const img=new Image();
+  img.onload=()=>{ cv.width=img.width; cv.height=img.height; ctx.drawImage(img,0,0); drawBoxes(i); };
+  img.src=p.image;
+  const items=$('#items'); items.innerHTML='';
+  $('#detCount').textContent=p.boxes.length+' items · '+(p.stats.regex_hits||0)+' by rules';
+  p.boxes.forEach((b,bi)=>{
+    const d=document.createElement('div'); d.className='item';
+    d.innerHTML=`<input type="checkbox" ${b.accepted?'checked':''} onchange="toggle(${i},${bi},this.checked)">
+      <div style="flex:1"><div><span class="chip c-${b.category}">${b.category}</span> <span class="lab">${b.label||''}</span></div>
+      <div class="rs">${b.text?('“'+b.text+'” · '):''}${b.reason||''} <small class="k">[${b.source}]</small></div></div>`;
+    items.appendChild(d);
+  });
+}
+function drawBoxes(i){
+  const cv=$('#cv'), ctx=cv.getContext('2d');
+  PAGES[i].boxes.forEach(b=>{ if(!b.accepted) return;
+    ctx.strokeStyle='#19c3a5'; ctx.lineWidth=3; ctx.strokeRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1);
+    ctx.fillStyle='rgba(25,195,165,.18)'; ctx.fillRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1); });
+}
+function toggle(i,bi,v){ PAGES[i].boxes[bi].accepted=v;
+  const cv=$('#cv'),ctx=cv.getContext('2d'); const img=new Image();
+  img.onload=()=>{ctx.drawImage(img,0,0);drawBoxes(i);}; img.src=PAGES[i].image; }
+
+async function doRedact(){
+  const dec={}; PAGES.forEach((p,i)=>dec[i]=p.boxes.map(b=>b.accepted));
+  $('#redactBtn').innerHTML='<span class="spin"></span> Destroying pixels…';
+  const r=await (await fetch('/api/redact/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dec)})).json();
+  $('#redactBtn').textContent='Redact & Export';
+  // show redacted preview
+  const cv=$('#cv'),ctx=cv.getContext('2d'); const img=new Image();
+  img.onload=()=>{cv.width=img.width;cv.height=img.height;ctx.drawImage(img,0,0);}; img.src=r.previews[0];
+  const v=r.verify;
+  $('#proof').innerHTML=`<div class="proofbox ${v.passed?'pass':''}">
+     <strong>${v.passed?'✓ Self-verification passed':'⚠ Residual detected'}</strong> —
+     ${r.redacted_count} items destroyed · text layer: ${v.has_text_layer?'PRESENT ⚠':'none'} ·
+     residual hits: ${v.residual_hits.length}
+     <div style="margin-top:10px"><small class="k">Copy-paste test — try selecting the redacted values:</small>
+     <div class="testarea" contenteditable="false">Name: ▉▉▉ · SSN: ▉▉▉ · (there is no text under the boxes)</div></div>
+     <a href="/api/redact/download" download><button class="ghost" style="margin-top:12px">Download redacted PDF</button></a></div>`;
+  checkEgress();
+}
+
+/* ---------- SECURE ---------- */
+async function doScan(){
+  $('#scanOut').classList.remove('hidden');
+  $('#scanBtn').innerHTML='<span class="spin"></span> Scanning…';
+  $('#findings').innerHTML='<div class="rs">collecting…</div>';
+  try{
+    const r=await (await fetch('/api/secure/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:q()})})).json();
+    $('#scoreVal').textContent=r.safety_score;
+    $('#scoreVal').style.color = r.safety_score>=80?'#19c3a5':r.safety_score>=55?'#f2b544':'#ff5c6c';
+    $('#scoreBreak').innerHTML = Object.entries(r.score_breakdown).map(([k,v])=>`<span class="pill">${k}: −${v}</span>`).join('')||'clean';
+    $('#scanNote').textContent = r.admin?'(admin scan)':'(run as Administrator for full config checks)';
+    $('#findings').innerHTML = r.findings.length? r.findings.map(f=>`
+      <div class="item"><div style="flex:1">
+        <div><span class="sev sev-${f.severity}">${f.severity.toUpperCase()}</span> · <span class="lab">${f.title}</span>
+        ${f.can_redact?`<button class="ghost" style="padding:3px 10px;font-size:12px;margin-left:8px" onclick="sendToRedactor('${(f.path||'').replace(/\\/g,'\\\\')}')">→ Send to Redactor</button>`:''}</div>
+        <div class="rs">${f.explanation||f.detail}</div>
+        ${f.remediation?`<div class="rs"><small class="k">Fix:</small> ${f.remediation} ${f.requires_admin?'<span class="pill">admin</span>':''} ${f.reversible?'<span class="pill">reversible</span>':''}</div>`:''}
+      </div></div>`).join('') : '<div class="proofbox pass">✓ No exposure found.</div>';
+  }catch(e){ $('#findings').innerHTML='scan failed: '+e; }
+  $('#scanBtn').textContent='Run scan';
+}
+function sendToRedactor(path){ tab('redact'); toast('Loaded '+path+' into Redactor (demo: drop the file to redact it).'); }
+
+/* ---------- ORGANIZE ---------- */
+async function doPlan(){
+  const root=$('#orgRoot').value.trim(); if(!root){toast('enter a folder path');return;}
+  $('#planBtn').innerHTML='<span class="spin"></span> Reading files…';
+  try{
+    const r=await (await fetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,quality:q()})})).json();
+    if(r.error){toast(r.error);$('#planBtn').textContent='Build plan';return;}
+    $('#orgOut').classList.remove('hidden');
+    $('#treePreview').innerHTML = Object.entries(r.tree_preview).map(([k,v])=>`<span class="pill">${k}: ${v}</span>`).join('');
+    const tb=$('#orgTable tbody'); tb.innerHTML='';
+    r.proposals.forEach(p=>{ const tr=document.createElement('tr');
+      tr.innerHTML=`<td><input type="checkbox" checked data-src="${p.src.replace(/"/g,'&quot;')}"></td>
+        <td class="mono">${p.old_name}</td><td class="mono" style="color:var(--accent)">${p.category}/${p.new_name}</td>
+        <td class="rs">${p.reason}</td><td>${(p.confidence*100|0)}%</td>`; tb.appendChild(tr); });
+    $('#planNote').textContent = r.proposals.length+' files planned';
+  }catch(e){ toast('plan failed: '+e); }
+  $('#planBtn').textContent='Build plan';
+}
+async function doApply(){
+  const excluded=$$('#orgTable tbody input:not(:checked)').map(c=>c.dataset.src);
+  $('#applyBtn').innerHTML='<span class="spin"></span> Moving…';
+  const r=await (await fetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({excluded})})).json();
+  $('#applyBtn').textContent='Apply';
+  toast('Moved '+r.moved+' files'+(r.skipped.length?(' · skipped '+r.skipped.length):'')+'. Undo is ready.');
+}
+async function doUndo(){
+  const r=await (await fetch('/api/organize/undo',{method:'POST'})).json();
+  toast('Restored '+r.restored+' files to their original locations.');
+}
+</script>
+</body>
+</html>
