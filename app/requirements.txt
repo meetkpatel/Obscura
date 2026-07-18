@@ -5,5 +5,10 @@ pymupdf
 pillow
 psutil
 json-repair
+presidio-analyzer          # deterministic PII Scan layer for REDACT (on-device)
+spacy                      # NER backend Presidio drives (PERSON/LOCATION/ORG)
 # External: Ollama >= 0.22 with gemma4:e4b-it-qat and gemma4:12b-it-qat pulled.
 # External: Tesseract OCR on PATH (standard mode; used for coordinate grounding).
+# External: spaCy model — run once, offline-cacheable for the USB stick:
+#   python -m spacy download en_core_web_lg
+# If presidio/spaCy are absent, REDACT falls back to regex + Gemma automatically.

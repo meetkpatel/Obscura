@@ -26,6 +26,7 @@ from PIL import Image
 
 from contracts import Box, DetectResult, coerce_category
 import gemma
+import presidio_detect
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +266,8 @@ VISION_PROMPT = (
 # and locate it with OCR — model coordinates on text drift; strings don't.
 VISUAL_CATS = {"signature", "face"}
 
+# Broad prompt — used ONLY when Presidio is unavailable, so Gemma still catches
+# structured PII + names/addresses on its own (deterministic fallback path).
 TEXT_ENTITY_PROMPT = (
     "You are a meticulous records/FOIA redaction officer. Read the document text "
     "below and list EVERY sensitive item that should be redacted. Bias toward "
@@ -282,14 +285,43 @@ TEXT_ENTITY_PROMPT = (
     "\"short\"}]}. If none, {\"items\":[]}.\n\nDOCUMENT:\n"
 )
 
+# Narrowed prompt — used when Presidio has ALREADY found the structured PII and
+# named entities. Here Gemma does the one job an LLM wins at: spotting the
+# re-identifying CONTEXT that a rule/NER engine can't reason about. Names,
+# emails, SSNs, phones, addresses, orgs are handled upstream — don't re-list them
+# unless they're part of a re-identifying phrase Presidio would miss.
+QUASI_ID_PROMPT = (
+    "You are a records/FOIA redaction officer doing a SECOND pass. A deterministic "
+    "engine has already flagged the obvious identifiers (names, addresses, emails, "
+    "phones, SSNs, account and ID numbers, dates). Your job is the subtle layer it "
+    "cannot reason about: QUASI-IDENTIFIERS and re-identifying context — phrases "
+    "that, in combination, could single out a specific person even with the obvious "
+    "identifiers removed.\n"
+    "Examples: a unique job title tied to a place ('the only female fire captain in "
+    "Dubuque'); a distinctive medical condition or diagnosis; a rare event, case, or "
+    "docket description; a relationship that pins an identity ('the plaintiff's "
+    "twin brother'); an unusual physical description; a non-standard internal ID, "
+    "badge, or reference number the rules missed.\n"
+    "Do NOT re-list plain names, addresses, emails, phones, or standard ID numbers — "
+    "those are already handled. Only return spans that add re-identification risk.\n"
+    "Copy each 'text' value EXACTLY (verbatim substring) so it can be located.\n"
+    "Return ONLY JSON: {\"items\":[{\"text\":\"verbatim substring\",\"category\":"
+    "\"person|medical|gov_id|financial|other\",\"reason\":\"why it re-identifies\"}]}."
+    " If none, {\"items\":[]}.\n\nDOCUMENT:\n"
+)
 
-def gemma_text_entities(full_text: str, words: list[dict], model: str) -> list[Box]:
-    """Ask Gemma for sensitive STRINGS (names/addresses/context regex misses),
-    then OCR-ground each to exact pixel boxes. No coordinate drift."""
+
+def gemma_text_entities(full_text: str, words: list[dict], model: str,
+                        presidio_on: bool = False) -> list[Box]:
+    """Ask Gemma for sensitive STRINGS, then OCR-ground each to exact pixel boxes.
+    When Presidio ran (`presidio_on`), Gemma is narrowed to quasi-identifier /
+    re-identification context; otherwise it does the full broad sweep so nothing
+    is missed on the deterministic-fallback path."""
     if not full_text.strip():
         return []
+    prompt = QUASI_ID_PROMPT if presidio_on else TEXT_ENTITY_PROMPT
     try:
-        data = gemma.generate_json(TEXT_ENTITY_PROMPT + full_text[:6000],
+        data = gemma.generate_json(prompt + full_text[:6000],
                                    model=model, num_predict=800, timeout=240)
     except gemma.GemmaError:
         return []
@@ -391,10 +423,13 @@ def detect_page(img: Image.Image, model: str, use_vision=True,
     W, H = img.size
     vision_model = vision_model or model
     full_text, words = ocr_words(img)
-    hits = regex_hits(full_text)
-    boxes = ground_text_boxes(hits, words)          # deterministic PII, exact
-    if use_gemma_text:                              # names/addresses/context, OCR-grounded
-        boxes += gemma_text_entities(full_text, words, model)
+    regex = regex_hits(full_text)                   # deterministic floor (works w/o presidio)
+    presidio_on = presidio_detect.available()
+    presidio = presidio_detect.presidio_hits(full_text) if presidio_on else []
+    hits = regex + presidio                         # structured PII + named entities
+    boxes = ground_text_boxes(hits, words)          # OCR-ground every hit to pixels
+    if use_gemma_text:                              # quasi-identifier / re-id context
+        boxes += gemma_text_entities(full_text, words, model, presidio_on=presidio_on)
     # Vision is for signatures/faces. Skip it on text-dense pages (signatures are
     # rare there and it's the slow part) — keeps the 12B path responsive.
     if use_vision and len(full_text) < 800:
@@ -407,7 +442,8 @@ def detect_page(img: Image.Image, model: str, use_vision=True,
         b.x2, b.y2 = min(W, b.x2), min(H, b.y2)
     return DetectResult(
         page_width=W, page_height=H, boxes=boxes, full_text=full_text,
-        stats={"regex_hits": len(hits), "words": len(words), "boxes": len(boxes)},
+        stats={"regex_hits": len(regex), "presidio_hits": len(presidio),
+               "presidio": presidio_on, "words": len(words), "boxes": len(boxes)},
     )
 
 
