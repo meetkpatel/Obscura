@@ -133,6 +133,8 @@ class OrganizePlan(BaseModel):
     naming_convention: str = ""
     taxonomy_reason: str = ""
     scanned: int = 0
+    capped: bool = False                 # hit the per-scan file cap (more remain)
+    cap: int = 0
 
 
 class DirEntry(BaseModel):

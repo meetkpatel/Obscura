@@ -397,7 +397,7 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
     return OrganizePlan(root=root, profile=profile, proposals=proposals,
                         tree_preview=tree, duplicates=dup_groups,
                         naming_convention=conv, taxonomy_reason=reason,
-                        scanned=len(files))
+                        scanned=len(files), capped=len(files) >= limit, cap=limit)
 
 
 def _taxonomy_reason(tree: dict, profile: str, n_dupes: int) -> str:

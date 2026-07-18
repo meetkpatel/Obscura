@@ -7,57 +7,81 @@
 <style>
 /* Offline by design: zero external fonts, scripts, or styles. */
 :root{
-  --bg:#0a0e14; --panel:#111823; --panel2:#161f2e; --line:#22304a;
-  --ink:#e8eef7; --muted:#8296b3; --accent:#19c3a5; --accent2:#0e8f7c;
+  --bg:#070b12; --bg2:#0b111c; --panel:#0f1723; --panel2:#151f2d; --line:#233047;
+  --ink:#eaf1fb; --muted:#8598b5; --faint:#5f6f8a;
+  --accent:#19c3a5; --accent2:#12a88f; --blue:#5aa0ff; --blueDim:#25406b;
   --warn:#f2b544; --crit:#ff5c6c; --ok:#19c3a5;
-  --shadow:0 10px 40px rgba(0,0,0,.45);
+  --shadow:0 14px 46px rgba(2,8,18,.55); --shadowSm:0 4px 16px rgba(2,8,18,.4);
+  --r:14px; --rSm:10px;
 }
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#12203099,transparent),var(--bg);
-  color:var(--ink);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
-a{color:var(--accent)}
-button{font:inherit;cursor:pointer;border:none;border-radius:10px;padding:11px 18px;
-  background:var(--accent);color:#052019;font-weight:650;transition:.15s}
-button:hover{background:var(--accent2)}
-button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
-button.ghost:hover{color:var(--ink);border-color:var(--accent)}
-button:disabled{opacity:.4;cursor:not-allowed}
-.badge{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;
-  background:#0d2b26;color:var(--accent);font-size:13px;font-weight:600;border:1px solid #124a41}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+::selection{background:#19c3a555}
+body{margin:0;background:
+  radial-gradient(1100px 560px at 85% -12%,#123a4d55,transparent),
+  radial-gradient(900px 500px at 0% 0%,#12224355,transparent),var(--bg);
+  color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;letter-spacing:.1px}
+a{color:var(--accent);text-decoration:none}
+button{font:inherit;cursor:pointer;border:none;border-radius:var(--rSm);padding:11px 18px;
+  background:linear-gradient(180deg,var(--accent),var(--accent2));color:#052019;font-weight:700;
+  transition:.15s;box-shadow:0 2px 10px #19c3a533}
+button:hover{filter:brightness(1.08);box-shadow:0 4px 18px #19c3a555}
+button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);box-shadow:none}
+button.ghost:hover{color:var(--ink);border-color:var(--accent);background:#0f1a28}
+button:disabled{opacity:.4;cursor:not-allowed;filter:none;box-shadow:none}
+.badge{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:999px;
+  background:#0c241f;color:var(--accent);font-size:12.5px;font-weight:650;border:1px solid #12463c;letter-spacing:.3px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent);animation:pulse 2s infinite}
 
 /* ---- login ---- */
-#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
-  background:radial-gradient(900px 500px at 50% 0%,#10202e,transparent),var(--bg);z-index:50}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:38px;
-  width:380px;box-shadow:var(--shadow)}
-.logo{font-size:30px;font-weight:800;letter-spacing:-.5px}
+#login{position:fixed;inset:0;display:flex;z-index:50;
+  background:radial-gradient(1000px 600px at 30% -10%,#0f2f3f,transparent),var(--bg)}
+.loginSplit{display:flex;width:100%}
+.loginHero{flex:1;display:none;flex-direction:column;justify-content:center;padding:6vw;
+  border-right:1px solid var(--line);background:linear-gradient(160deg,#0c1a2400,#0d2a2633)}
+.loginHero h1{font-size:38px;line-height:1.15;margin:0 0 14px;letter-spacing:-.8px}
+.loginHero p{color:var(--muted);font-size:17px;max-width:440px;line-height:1.5}
+.trustRow{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}
+.loginMain{width:100%;max-width:460px;display:flex;align-items:center;justify-content:center;padding:32px}
+@media(min-width:900px){.loginHero{display:flex}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:40px;
+  width:100%;max-width:400px;box-shadow:var(--shadow)}
+.logo{font-size:28px;font-weight:800;letter-spacing:-.6px;display:inline-flex;align-items:center;gap:10px}
 .logo span{color:var(--accent)}
-.tag{color:var(--muted);margin:6px 0 26px;font-size:15px}
-.field{width:100%;padding:12px 14px;margin-bottom:12px;background:var(--panel2);
-  border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit}
-.field:focus{outline:none;border-color:var(--accent)}
+.logoMark{width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--blue));
+  display:inline-flex;align-items:center;justify-content:center;box-shadow:0 4px 14px #19c3a544;flex:none}
+.logoMark::before{content:"";width:13px;height:13px;border-radius:50%;background:#071018;box-shadow:inset 0 0 0 3px var(--accent)}
+.tag{color:var(--muted);margin:10px 0 26px;font-size:15px}
+.field{width:100%;padding:13px 15px;margin-bottom:12px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:var(--rSm);color:var(--ink);font:inherit;transition:.15s}
+.field:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px #19c3a522}
+.field::placeholder{color:var(--faint)}
 
 /* ---- app shell ---- */
 #app{display:none;min-height:100vh}
-header{display:flex;align-items:center;gap:18px;padding:16px 26px;border-bottom:1px solid var(--line);
-  position:sticky;top:0;background:#0a0e14ee;backdrop-filter:blur(8px);z-index:10}
-header .logo{font-size:20px}
-.tabs{display:flex;gap:6px;margin-left:8px}
-.tab{padding:9px 18px;border-radius:10px;color:var(--muted);font-weight:600;cursor:pointer;border:1px solid transparent}
-.tab.active{color:var(--ink);background:var(--panel);border-color:var(--line)}
+header{display:flex;align-items:center;gap:20px;padding:14px 28px;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:#070b12dd;backdrop-filter:blur(12px);z-index:10}
+header .logo{font-size:19px}
+.tabs{display:flex;gap:4px;margin-left:14px;background:var(--panel2);padding:4px;border-radius:12px;border:1px solid var(--line)}
+.tab{padding:8px 18px;border-radius:9px;color:var(--muted);font-weight:650;cursor:pointer;font-size:14px;
+  transition:.15s;display:flex;align-items:center;gap:7px}
+.tab:hover{color:var(--ink)}
+.tab.active{color:#052019;background:linear-gradient(180deg,var(--accent),var(--accent2));box-shadow:0 2px 8px #19c3a544}
+.tab .tico{font-size:15px}
 .spacer{flex:1}
-main{padding:26px;max-width:1180px;margin:0 auto}
-.view{display:none}.view.active{display:block}
-h2{margin:0 0 4px;font-size:24px}
-.sub{color:var(--muted);margin:0 0 22px}
+main{padding:30px 28px;max-width:1200px;margin:0 auto}
+.view{display:none}.view.active{display:block;animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+h2{margin:0 0 5px;font-size:26px;letter-spacing:-.4px}
+.sub{color:var(--muted);margin:0 0 22px;font-size:15px;max-width:760px;line-height:1.5}
 .grid{display:grid;gap:18px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
-.drop{border:2px dashed var(--line);border-radius:14px;padding:44px;text-align:center;color:var(--muted);
-  transition:.15s;cursor:pointer}
-.drop:hover,.drop.over{border-color:var(--accent);color:var(--ink);background:#0d1a2488}
-.row{display:flex;gap:18px;align-items:flex-start}
-.col{flex:1;min-width:0}
+.panel{background:linear-gradient(180deg,var(--panel),#0d1420);border:1px solid var(--line);
+  border-radius:var(--r);padding:20px;box-shadow:var(--shadowSm)}
+.drop{border:1.5px dashed var(--line);border-radius:var(--r);padding:48px;text-align:center;color:var(--muted);
+  transition:.2s;cursor:pointer;background:#0b121d66}
+.drop:hover,.drop.over{border-color:var(--accent);color:var(--ink);background:#0d1f2277;box-shadow:inset 0 0 40px #19c3a511}
+.row{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1;min-width:280px}
 canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background:#000}
 .item{display:flex;gap:10px;align-items:flex-start;padding:11px;border:1px solid var(--line);
   border-radius:10px;margin-bottom:9px;background:var(--panel2)}
@@ -114,36 +138,51 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 
 <!-- LOGIN (mock) -->
 <div id="login">
-  <div class="card">
-    <div class="logo">OBS<span>CURA</span></div>
-    <div class="tag">Redaction that never leaves the room.</div>
-    <input class="field" id="email" placeholder="officer@agency.gov" value="dana@records.gov">
-    <input class="field" id="pw" type="password" placeholder="••••••••" value="demo">
-    <button style="width:100%" onclick="signIn()">Sign in</button>
-    <div style="text-align:center;margin-top:14px"><span class="badge"><span class="dot"></span>On-device · No network</span></div>
-    <button class="ghost" style="width:100%;margin-top:12px" disabled>SSO (coming soon)</button>
+  <div class="loginSplit">
+    <div class="loginHero">
+      <div class="logo" style="margin-bottom:34px"><span class="logoMark"></span>OBS<span>CURA</span></div>
+      <h1>Your patients' privacy,<br>protected on your own device.</h1>
+      <p>Redact records, harden your machine, and organize your files with on-device AI. Nothing a patient trusts you with ever leaves this computer.</p>
+      <div class="trustRow">
+        <span class="badge"><span class="dot"></span>100% on-device</span>
+        <span class="badge">HIPAA Safe Harbor aware</span>
+        <span class="badge">No cloud · No BAA needed</span>
+        <span class="badge">Open weights · Apache-2.0</span>
+      </div>
+    </div>
+    <div class="loginMain">
+      <div class="card">
+        <div class="logo" style="margin-bottom:2px"><span class="logoMark"></span>OBS<span>CURA</span></div>
+        <div class="tag">Sign in to your on-device workspace.</div>
+        <input class="field" id="email" placeholder="you@clinic.org" value="dana@valleyclinic.org">
+        <input class="field" id="pw" type="password" placeholder="••••••••" value="demo">
+        <button style="width:100%" onclick="signIn()">Sign in securely</button>
+        <div style="text-align:center;margin-top:16px"><span class="badge"><span class="dot"></span>Runs entirely on this machine</span></div>
+        <button class="ghost" style="width:100%;margin-top:12px" disabled>Single sign-on (coming soon)</button>
+      </div>
+    </div>
   </div>
 </div>
 
 <!-- APP -->
 <div id="app">
   <header>
-    <div class="logo">OBS<span>CURA</span></div>
+    <div class="logo"><span class="logoMark"></span>OBS<span>CURA</span></div>
     <div class="tabs">
-      <div class="tab active" data-v="redact" onclick="tab('redact')">REDACT</div>
-      <div class="tab" data-v="secure" onclick="tab('secure')">SECURE</div>
-      <div class="tab" data-v="organize" onclick="tab('organize')">ORGANIZE</div>
+      <div class="tab active" data-v="redact" onclick="tab('redact')"><span class="tico">🛡</span> Redact</div>
+      <div class="tab" data-v="secure" onclick="tab('secure')"><span class="tico">🔒</span> Secure</div>
+      <div class="tab" data-v="organize" onclick="tab('organize')"><span class="tico">🗂</span> Organize</div>
     </div>
     <div class="spacer"></div>
-    <span class="badge" id="egressBadge" onclick="checkEgress()" style="cursor:pointer"><span class="dot"></span><span id="egressText">On-device · No network</span></span>
+    <span class="badge" id="egressBadge" onclick="checkEgress()" style="cursor:pointer" title="Click to verify no data left this machine"><span class="dot"></span><span id="egressText">On-device · No network</span></span>
     <span class="pill mono" id="modelPill">gemma4</span>
   </header>
 
   <main>
     <!-- REDACT -->
     <section class="view active" id="v-redact">
-      <h2>Redact a document</h2>
-      <p class="sub">Gemma 4 + deterministic rules find every sensitive item, on this laptop. You approve. We destroy the pixels — no recoverable text layer.</p>
+      <h2>Redact patient records with confidence</h2>
+      <p class="sub">On-device AI finds every identifier a records officer must remove — names, MRNs, SSNs, addresses, dates — and shows you each one. You approve; Obscura destroys the pixels. No recoverable text, no metadata, and a verification report you can keep. Nothing leaves this machine.</p>
       <div class="panel" id="hwPanel" style="margin-bottom:16px">
         <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
           <div>
@@ -199,8 +238,8 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 
     <!-- SECURE -->
     <section class="view" id="v-secure">
-      <h2>Secure this machine</h2>
-      <p class="sub">A read-only, on-device scan for exposure — secrets in plaintext, weak configuration, risky ports. Gemma explains each finding. Nothing is changed without your click.</p>
+      <h2>Protect the machine your records live on</h2>
+      <p class="sub">The device holding patient data is part of your security posture. This read-only scan checks for exposed secrets, weak configuration, and risky services — mapped to CIS Level 1 benchmarks — and explains every finding in plain language. Nothing changes without your click.</p>
       <button onclick="doScan()" id="scanBtn">Run scan</button>
       <span class="rs" id="scanNote" style="margin-left:12px"></span>
       <div id="scanOut" class="hidden" style="margin-top:20px">
@@ -220,8 +259,8 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 
     <!-- ORGANIZE -->
     <section class="view" id="v-organize">
-      <h2>Organize the filesystem</h2>
-      <p class="sub">Gemma reads the first page of every file and proposes a clean, searchable structure. Finds exact duplicates. Nothing moves until you Apply — and one click Undoes everything.</p>
+      <h2>Bring order to your records</h2>
+      <p class="sub">On-device AI reads the first page of every file, maps your current folders, and proposes a clean clinical structure with searchable names — <span class="mono">Date_Patient_DocType</span> — so any record is one search away. It finds exact duplicates, runs gently in the background so it never slows your work, and nothing moves until you approve. One click Undoes everything.</p>
 
       <!-- directory browser -->
       <div class="panel" id="browser">
@@ -658,7 +697,8 @@ async function scanHere(){
 
 function renderPlan(r){
   $('#orgOut').classList.remove('hidden');
-  $('#planNote').textContent = `${r.scanned} files scanned · ${r.duplicates.length} duplicate set(s)`;
+  $('#planNote').innerHTML = `${r.scanned} files scanned · ${r.duplicates.length} duplicate set(s)`
+    + (r.capped? ` · <span style="color:var(--warn)">⚠ reached the ${r.cap}-file batch cap — run again after applying to continue through the rest</span>` : '');
   // structure tree
   $('#treePreview').innerHTML = Object.entries(r.tree_preview).sort().map(([k,v])=>
     `<div class="treeRow"><span class="mono">${esc(k)}</span><span class="pill">${v}</span></div>`).join('') || '<span class="rs">—</span>';
