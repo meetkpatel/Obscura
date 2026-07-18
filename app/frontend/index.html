@@ -74,6 +74,23 @@ canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background
 .proofbox.pass{border-color:var(--ok);color:var(--ok);background:#08150f}
 .testarea{user-select:text;padding:12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted)}
 .hidden{display:none}
+/* ---- scanning HUD ---- */
+#cvWrap{border-radius:10px;overflow:hidden}
+.hud{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:8px;
+  padding:6px 12px;border-radius:8px;background:#04141bcc;border:1px solid var(--accent);
+  color:var(--accent);font-size:12px;font-weight:700;letter-spacing:1.5px;
+  font-family:Consolas,monospace;box-shadow:0 0 20px #19c3a555;backdrop-filter:blur(4px);z-index:3}
+.hudDot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent);animation:pulse 1s infinite}
+#hudCount{color:#cfe;font-weight:600;letter-spacing:.5px}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.7)}}
+.scanCorner{position:absolute;width:26px;height:26px;border:2px solid var(--accent);opacity:0;
+  transition:opacity .3s;pointer-events:none;z-index:2;filter:drop-shadow(0 0 4px #19c3a5)}
+.scanCorner.tl{top:6px;left:6px;border-right:0;border-bottom:0}
+.scanCorner.tr{top:6px;right:6px;border-left:0;border-bottom:0}
+.scanCorner.bl{bottom:6px;left:6px;border-right:0;border-top:0}
+.scanCorner.br{bottom:6px;right:6px;border-left:0;border-top:0}
+#cvWrap.scanning .scanCorner{opacity:1;animation:cornerPulse 1.4s infinite}
+@keyframes cornerPulse{0%,100%{opacity:.5}50%{opacity:1}}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);
   border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -139,7 +156,10 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
       <div class="panel hidden" id="hipaaPanel" style="margin-bottom:16px"></div>
       <div class="drop" id="drop" onclick="document.getElementById('fi').click()">
         <div style="font-size:17px">Drop a PDF or image here, or click to choose</div>
-        <div style="margin-top:6px">Try <span class="mono">demo-data/sample-foia.png</span></div>
+        <div class="flex" style="justify-content:center;margin-top:12px" onclick="event.stopPropagation()">
+          <button class="ghost" onclick="loadSample('/demo-data/sample-medical.png')">Try a patient record</button>
+          <button class="ghost" onclick="loadSample('/demo-data/sample-foia.png')">Try a records document</button>
+        </div>
         <input type="file" id="fi" class="hidden" accept=".pdf,.png,.jpg,.jpeg" onchange="onFile(this.files[0])">
       </div>
       <div id="redactWork" class="hidden" style="margin-top:20px">
@@ -149,7 +169,15 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
               <strong>Document</strong>
               <span class="rs mono" id="activeModel"></span>
             </div>
-            <canvas id="cv"></canvas>
+            <div id="cvWrap" style="position:relative;line-height:0">
+              <canvas id="cv"></canvas>
+              <div id="hud" class="hud hidden">
+                <span class="hudDot"></span><span id="hudText">SCANNING</span>
+                <span id="hudCount"></span>
+              </div>
+              <div class="scanCorner tl"></div><div class="scanCorner tr"></div>
+              <div class="scanCorner bl"></div><div class="scanCorner br"></div>
+            </div>
             <div style="margin-top:12px" id="proof"></div>
           </div>
           <div class="col panel" style="max-width:420px">
@@ -289,6 +317,13 @@ const drop=$('#drop');
 drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
 
 let CUR=0, DETECTED=[];
+async function loadSample(url){
+  try{
+    const blob=await (await fetch(url)).blob();
+    const name=url.split('/').pop();
+    onFile(new File([blob], name, {type: blob.type||'image/png'}));
+  }catch(e){ toast('Could not load sample: '+e.message); }
+}
 async function onFile(f){
   if(!f) return;
   $('#redactWork').classList.remove('hidden');
@@ -303,18 +338,67 @@ async function onFile(f){
   }catch(e){ $('#items').innerHTML='<div class="proofbox">⚠ Load failed: '+e+'</div>'; }
 }
 
+const imgCache={};
+function loadImg(i){ return new Promise(res=>{ if(imgCache[i]) return res(imgCache[i]);
+  const im=new Image(); im.onload=()=>{imgCache[i]=im;res(im);}; im.src=PAGES[i].image; }); }
+
+let scanRAF=null, scanToken=0;
+async function startScan(i){
+  const myTok=++scanToken;
+  const cv=$('#cv'), ctx=cv.getContext('2d'); const im=await loadImg(i);
+  if(myTok!==scanToken) return;   // superseded while the image loaded
+  cv.width=im.width; cv.height=im.height;
+  $('#cvWrap').classList.add('scanning'); $('#hud').classList.remove('hidden');
+  $('#hudText').textContent='SCANNING'; $('#hudCount').textContent='';
+  const t0=performance.now();
+  (function loop(){ if(myTok!==scanToken) return;
+    ctx.drawImage(im,0,0);
+    const period=1500, y=((performance.now()-t0)%period)/period*cv.height;
+    drawSweep(ctx,cv.width,cv.height,y);
+    scanRAF=requestAnimationFrame(loop);
+  })();
+}
+function drawSweep(ctx,w,h,y){
+  const band=Math.max(70,h*0.11);
+  const g=ctx.createLinearGradient(0,y-band,0,y);
+  g.addColorStop(0,'rgba(25,195,165,0)'); g.addColorStop(1,'rgba(25,195,165,0.26)');
+  ctx.fillStyle=g; ctx.fillRect(0,y-band,w,band);
+  ctx.strokeStyle='rgba(150,255,235,0.95)'; ctx.lineWidth=2;
+  ctx.shadowColor='#19c3a5'; ctx.shadowBlur=18;
+  ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); ctx.shadowBlur=0;
+  ctx.strokeStyle='rgba(25,195,165,0.05)'; ctx.lineWidth=1;
+  for(let gx=0;gx<w;gx+=50){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,h);ctx.stroke();}
+}
+function stopScan(){ scanToken++; cancelAnimationFrame(scanRAF);
+  $('#cvWrap').classList.remove('scanning'); $('#hud').classList.add('hidden'); }
+
+async function animateBoxesIn(i){
+  const cv=$('#cv'), ctx=cv.getContext('2d'); const im=await loadImg(i);
+  const boxes=PAGES[i].boxes||[];
+  $('#cvWrap').classList.add('scanning'); $('#hud').classList.remove('hidden'); $('#hudText').textContent='DETECTED';
+  for(let n=1;n<=boxes.length;n++){
+    if(CUR!==i) return;
+    ctx.drawImage(im,0,0);
+    for(let k=0;k<n;k++) drawBox(ctx,boxes[k],k===n-1);
+    $('#hudCount').textContent=n+(n===1?' item':' items');
+    await new Promise(r=>setTimeout(r, boxes.length>18?35:70));
+  }
+  setTimeout(()=>{ $('#cvWrap').classList.remove('scanning'); $('#hud').classList.add('hidden'); if(CUR===i) renderImage(i); }, 450);
+}
+
 async function detectPage(i){
-  renderImage(i);
-  if(DETECTED[i]){ renderItems(i); return; }
+  if(DETECTED[i]){ stopScan(); renderImage(i); renderItems(i); return; }
   $('#items').innerHTML=`<div class="rs"><span class="spin"></span> ${q()?'Gemma 12B':'Gemma 4'} reading page ${i+1}… (one page at a time${q()?'; 12B is slower':''})</div>`;
+  await startScan(i);
   try{
     const r=await jfetch('/api/redact/detect_page',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({index:i, quality:q()})});
-    if(r.error){ $('#items').innerHTML='<div class="proofbox">⚠ '+r.error+'</div>'; return; }
+    stopScan();
+    if(r.error){ renderImage(i); $('#items').innerHTML='<div class="proofbox">⚠ '+r.error+'</div>'; return; }
     PAGES[i].boxes=r.boxes; DETECTED[i]=true;
     if(r.note) toast('Page '+(i+1)+': '+r.note);
-    if(CUR===i){ renderImage(i); renderItems(i); }
-  }catch(e){ $('#items').innerHTML='<div class="proofbox">⚠ Detection failed: '+e+'</div>'; }
+    if(CUR===i){ renderItems(i); animateBoxesIn(i); }
+  }catch(e){ stopScan(); renderImage(i); $('#items').innerHTML='<div class="proofbox">⚠ Detection failed: '+e.message+'</div>'; }
 }
 
 function renderPager(n){
@@ -329,11 +413,20 @@ function renderPager(n){
 function pg(d){ CUR=Math.max(0,Math.min(PAGES.length-1,CUR+d)); const e=$('#pgn'); if(e) e.textContent=CUR+1; detectPage(CUR); }
 async function detectAll(){ for(let i=0;i<PAGES.length;i++){ if(!DETECTED[i]){ CUR=i; const e=$('#pgn'); if(e) e.textContent=i+1; await detectPage(i);} } toast('All pages detected.'); }
 
-function renderImage(i){
-  const p=PAGES[i]; const cv=$('#cv'), ctx=cv.getContext('2d');
-  const img=new Image();
-  img.onload=()=>{ cv.width=img.width; cv.height=img.height; ctx.drawImage(img,0,0); drawBoxes(i); };
-  img.src=p.image;
+async function renderImage(i){
+  const cv=$('#cv'), ctx=cv.getContext('2d'); const im=await loadImg(i);
+  cv.width=im.width; cv.height=im.height; ctx.drawImage(im,0,0);
+  (PAGES[i].boxes||[]).forEach(b=>drawBox(ctx,b,false));
+}
+function drawBox(ctx,b,glow){
+  ctx.save();
+  const on=b.accepted;
+  if(glow){ ctx.shadowColor='#19c3a5'; ctx.shadowBlur=22; }
+  ctx.strokeStyle=on?'#19c3a5':'#4a5a72'; ctx.lineWidth=glow?4:3;
+  ctx.strokeRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1);
+  ctx.fillStyle='rgba(25,195,165,'+(glow?0.34:(on?0.16:0.04))+')';
+  ctx.fillRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1);
+  ctx.restore();
 }
 function renderItems(i){
   const p=PAGES[i]; const items=$('#items'); items.innerHTML='';
@@ -348,13 +441,25 @@ function renderItems(i){
     items.appendChild(d);
   });
 }
-function drawBoxes(i){
-  const cv=$('#cv'), ctx=cv.getContext('2d'); const boxes=PAGES[i].boxes||[];
-  boxes.forEach(b=>{ if(!b.accepted) return;
-    ctx.strokeStyle='#19c3a5'; ctx.lineWidth=3; ctx.strokeRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1);
-    ctx.fillStyle='rgba(25,195,165,.18)'; ctx.fillRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1); });
-}
 function toggle(i,bi,v){ PAGES[i].boxes[bi].accepted=v; renderImage(i); }
+
+async function burnRedact(i){
+  const cv=$('#cv'),ctx=cv.getContext('2d'); const im=await loadImg(i);
+  const boxes=(PAGES[i].boxes||[]).filter(b=>b.accepted);
+  $('#hud').classList.remove('hidden'); $('#cvWrap').classList.add('scanning');
+  $('#hudText').textContent='REDACTING'; $('#hudCount').textContent=boxes.length+' burning';
+  for(let f=0;f<3;f++){                       // flash the targets bright
+    ctx.drawImage(im,0,0);
+    boxes.forEach(b=>{ ctx.fillStyle='rgba(150,255,235,0.85)'; ctx.fillRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1); });
+    await new Promise(r=>setTimeout(r,85));
+    ctx.drawImage(im,0,0); await new Promise(r=>setTimeout(r,55));
+  }
+  ctx.drawImage(im,0,0);                        // burn to black
+  boxes.forEach(b=>{ ctx.fillStyle='#000'; ctx.fillRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1); });
+  $('#hudText').textContent='DESTROYED'; $('#hudCount').textContent='';
+  await new Promise(r=>setTimeout(r,420));
+  $('#cvWrap').classList.remove('scanning'); $('#hud').classList.add('hidden');
+}
 
 async function doRedact(){
   const dec={}; PAGES.forEach((p,i)=>{ if(p.boxes) dec[i]=p.boxes.map(b=>b.accepted); });
@@ -364,10 +469,10 @@ async function doRedact(){
   catch(e){ $('#redactBtn').textContent='Redact & Export'; toast('Redact failed: '+e.message); return; }
   $('#redactBtn').textContent='Redact & Export';
   if(r.note) toast(r.note);
+  await burnRedact(CUR);   // flash + burn the accepted boxes to black
   // swap the page images for the redacted previews so the pager shows all pages redacted
-  PAGES.forEach((p,i)=>{ if(r.previews[i]){ p.image=r.previews[i]; p.boxes=[]; } });
-  const cv=$('#cv'),ctx=cv.getContext('2d'); const img=new Image();
-  img.onload=()=>{cv.width=img.width;cv.height=img.height;ctx.drawImage(img,0,0);}; img.src=r.previews[CUR]||r.previews[0];
+  PAGES.forEach((p,i)=>{ if(r.previews[i]){ p.image=r.previews[i]; p.boxes=[]; delete imgCache[i]; } });
+  renderImage(CUR);
   const v=r.verify;
   const battery=(v.checks||[]).map(c=>`<div class="rs" style="margin:3px 0">${c.passed?'✓':'⚠'} <b>${c.name}</b> — ${c.detail}</div>`).join('');
   $('#proof').innerHTML=`<div class="proofbox ${v.passed?'pass':''}">

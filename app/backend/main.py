@@ -341,6 +341,10 @@ def index():
 if FRONTEND.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND)), name="static")
 
+DEMO = Path(__file__).resolve().parent.parent / "demo-data"
+if DEMO.exists():
+    app.mount("/demo-data", StaticFiles(directory=str(DEMO)), name="demo")
+
 
 # startup: reconcile any interrupted organize run
 p3.reconcile(JOURNAL)
