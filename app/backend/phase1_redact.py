@@ -82,17 +82,19 @@ REGEX_RULES: list[tuple[str, str, str]] = [
     # (category, label, pattern)
     ("gov_id", "SSN", r"\b\d{3}-\d{2}-\d{4}\b"),
     ("gov_id", "EIN/Tax ID", r"\b\d{2}-\d{7}\b"),
-    ("gov_id", "bar/license no.", r"\b(?:VSB|Bar|License|Lic)\s*#?\s*\d{3,7}\b"),
+    ("gov_id", "bar/license no.", r"\b(?:VSB|Bar|License|Lic)\s*#?\s*(\d{3,7})\b"),
     ("contact", "email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ("contact", "phone", r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
     ("address", "P.O. Box", r"\bP\.?\s*O\.?\s*Box\s+\d+\b"),
     ("date", "date", r"\b(?:0?[1-9]|1[0-2])[/\-.](?:0?[1-9]|[12]\d|3[01])[/\-.](?:19|20)\d{2}\b"),
     ("date", "written date", r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(?:19|20)\d{2}\b"),
     ("financial", "credit card", r"\b(?:\d[ -]?){13,16}\b"),
-    ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*\d{4,}\b"),
+    ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*(\d{4,})\b"),
     # --- HIPAA Safe Harbor healthcare identifiers (45 CFR 164.514(b)(2)) ---
-    ("medical", "medical record no.", r"\b(?:MRN|Medical\s*Record(?:\s*(?:No|Number|#))?)\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
-    ("medical", "health plan/member ID", r"\b(?:Member|Beneficiary|Subscriber|Policy|Group|Plan|Insurance)\s*(?:ID|No|Number|#)\.?\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
+    # NOTE: the label anchors the match but is captured in group(1) so only the
+    # VALUE is boxed — the "MRN"/"Member ID" label stays visible.
+    ("medical", "medical record no.", r"\b(?:MRN|Medical\s*Record(?:\s*(?:No|Number|#))?)\s*[:#]?\s*([A-Z0-9-]{4,})\b"),
+    ("medical", "health plan/member ID", r"\b(?:Member|Beneficiary|Subscriber|Policy|Group|Plan|Insurance)\s*(?:ID|No|Number|#)\.?\s*[:#]?\s*([A-Z0-9-]{4,})\b"),
     ("other", "URL", r"\bhttps?://[^\s]+|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ("other", "VIN", r"\b[A-HJ-NPR-Z0-9]{17}\b"),
     ("other", "IP address", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
@@ -147,10 +149,13 @@ def regex_hits(text: str) -> list[dict]:
     hits = []
     for cat, label, pat in REGEX_RULES:
         for m in re.finditer(pat, text):
-            s = m.group(0)
-            if label == "credit card" and not _luhn(s):
+            full = m.group(0)
+            if label == "credit card" and not _luhn(full):
                 continue
-            hits.append({"category": cat, "label": label, "text": s.strip()})
+            # If the rule captured a value group, box ONLY that (the label stays
+            # visible); otherwise box the whole match.
+            value = (m.group(1) if m.groups() else full) or full
+            hits.append({"category": cat, "label": label, "text": value.strip()})
     return hits
 
 
@@ -213,17 +218,41 @@ def _emit_line_boxes(matched: list[dict], hit: dict, pad_frac: float) -> list[Bo
 def _box_from_words(ws: list[dict], hit: dict, pad_frac: float) -> Box:
     x1 = min(w["x1"] for w in ws); y1 = min(w["y1"] for w in ws)
     x2 = max(w["x2"] for w in ws); y2 = max(w["y2"] for w in ws)
-    padx = int((x2 - x1) * pad_frac) + 2
-    pady = int((y2 - y1) * pad_frac) + 2
+    # Pad to fully cover the glyphs, but CAP it — a proportional pad on a wide
+    # value (long URL) would otherwise bleed onto the neighbouring label.
+    padx = min(int((x2 - x1) * pad_frac) + 2, 10)
+    pady = min(int((y2 - y1) * pad_frac) + 2, 10)
     return Box(x1=x1 - padx, y1=y1 - pady, x2=x2 + padx, y2=y2 + pady,
               category=hit["category"], label=hit["label"], text=hit["text"],
               confidence=0.98, source="ocr_grounded",
               reason=hit.get("reason") or "Matched by deterministic rule.")
 
 
+def _trim_to_target(matched: list[dict], target: str) -> list[dict]:
+    """Drop leading/trailing OCR words that fall OUTSIDE the matched target span.
+
+    Grounding accumulates words from the start of a line, so the value box would
+    otherwise swallow a preceding field label ("Phone: (559)…" -> box over
+    "Phone:" too). Keep only the words whose characters overlap the target span.
+    """
+    norm = [re.sub(r"\s+", "", w["text"]).lower() for w in matched]
+    pos = "".join(norm).find(target)
+    if pos < 0:
+        return matched
+    start, end = pos, pos + len(target)
+    out, cursor = [], 0
+    for w, n in zip(matched, norm):
+        w0, w1 = cursor, cursor + len(n)
+        cursor = w1
+        if w1 > start and w0 < end:            # word overlaps [start, end)
+            out.append(w)
+    return out or matched
+
+
 def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06) -> list[Box]:
     """Map each hit string to exact OCR word boxes. Handles multi-line spans
-    (wrapped addresses) by emitting one box per line segment. No grid drift."""
+    (wrapped addresses) by emitting one box per line segment. No grid drift.
+    Leading/trailing label words are trimmed so only the value is boxed."""
     boxes: list[Box] = []
     claimed: set[tuple[str, int]] = set()
     for hit in hits:
@@ -238,7 +267,8 @@ def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06) -> lis
                 if target in acc:
                     if (hit["text"], i) not in claimed:
                         claimed.add((hit["text"], i))
-                        boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
+                        tight = _trim_to_target(matched, target)
+                        boxes.extend(_emit_line_boxes(tight, hit, pad_frac))
                     break
                 if len(acc) > len(target) + 6:
                     break

@@ -57,6 +57,14 @@ ENTITY_CATEGORY = {
     "DATE_TIME": "date",
 }
 
+# Field-label tokens spaCy NER tends to mistag as ORGANIZATION (e.g. "SSN",
+# "MRN", "NPI"). These are labels, not values — dropping them keeps the box on
+# the value next to them (which its own recognizer/regex catches).
+LABEL_NOISE = {
+    "ssn", "mrn", "npi", "ein", "dob", "dea", "id", "zip", "pin", "vin",
+    "insurance", "member", "patient", "provider", "group", "plan", "policy",
+}
+
 _LOCK = threading.Lock()
 _ANALYZER = None          # lazy singleton (loading spaCy takes ~1-2s)
 _INIT_FAILED = False      # remember an import/load failure; don't retry every page
@@ -133,6 +141,12 @@ def presidio_hits(text: str) -> list[dict]:
     for r in results:
         span = text[r.start:r.end].strip()
         if not (2 <= len(span) <= 90):
+            continue
+        # Drop bare field labels NER mistagged (usually as ORGANIZATION): a
+        # single token ending in ':' or in the label stoplist. Multi-word spans
+        # (real org names like "Blue Shield Group") are kept.
+        bare = span.rstrip(":").strip().lower()
+        if " " not in bare and (span.endswith(":") or bare in LABEL_NOISE):
             continue
         cat = ENTITY_CATEGORY.get(r.entity_type) or coerce_category(r.entity_type)
         hits.append({
