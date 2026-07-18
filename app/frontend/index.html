@@ -74,6 +74,10 @@ canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background
 .proofbox.pass{border-color:var(--ok);color:var(--ok);background:#08150f}
 .testarea{user-select:text;padding:12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted)}
 .hidden{display:none}
+/* ---- directory browser ---- */
+.dirItem{padding:8px 12px;border-radius:8px;cursor:pointer;border:1px solid transparent;font-size:14px}
+.dirItem:hover{background:var(--panel2);border-color:var(--accent);color:var(--ink)}
+.treeRow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line)}
 /* ---- scanning HUD ---- */
 #cvWrap{border-radius:10px;overflow:hidden}
 .hud{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:8px;
@@ -215,24 +219,53 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
     <!-- ORGANIZE -->
     <section class="view" id="v-organize">
       <h2>Organize the filesystem</h2>
-      <p class="sub">Gemma reads each file and proposes a clean structure and names. Nothing moves until you Apply — and one click Undoes everything.</p>
-      <div class="flex">
-        <input type="text" id="orgRoot" placeholder="C:\Users\you\Downloads\messy-folder">
-        <button onclick="doPlan()" id="planBtn" style="white-space:nowrap">Build plan</button>
+      <p class="sub">Gemma reads the first page of every file and proposes a clean, searchable structure. Finds exact duplicates. Nothing moves until you Apply — and one click Undoes everything.</p>
+
+      <!-- directory browser -->
+      <div class="panel" id="browser">
+        <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div class="flex">
+            <button class="ghost" onclick="browseTo('')">🖥 This PC</button>
+            <button class="ghost" id="upBtn" onclick="browseUp()">↑ Up</button>
+            <span class="mono rs" id="curPath" style="max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          </div>
+          <div class="flex">
+            <select id="profileSel" class="field" style="width:auto;margin:0">
+              <option value="healthcare" selected>Healthcare profile</option>
+              <option value="general">General profile</option>
+            </select>
+            <button onclick="scanHere()" id="scanBtnO">Scan this folder ▸</button>
+          </div>
+        </div>
+        <div id="dirList" style="max-height:34vh;overflow:auto;margin-top:12px"></div>
       </div>
       <span class="rs" id="planNote"></span>
-      <div id="orgOut" class="hidden" style="margin-top:20px">
-        <div class="panel">
+
+      <div id="orgOut" class="hidden" style="margin-top:18px">
+        <!-- structure + duplicates summary -->
+        <div class="row">
+          <div class="col panel">
+            <strong>Proposed structure</strong>
+            <div id="treePreview" style="margin-top:8px"></div>
+            <div class="rs" id="taxReason" style="margin-top:10px"></div>
+            <div class="rs" id="namingConv" style="margin-top:8px"></div>
+          </div>
+          <div class="col panel" id="dupPanel" style="max-width:420px">
+            <strong>Duplicates</strong>
+            <div id="dupList" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <!-- file table -->
+        <div class="panel" style="margin-top:16px">
           <div class="flex" style="justify-content:space-between">
             <strong>Proposed renames &amp; moves</strong>
             <div class="flex">
-              <button class="ghost" onclick="doUndo()" id="undoBtn">Undo</button>
+              <button class="ghost" onclick="doUndo()" id="undoBtn">Undo last apply</button>
               <button onclick="doApply()" id="applyBtn">Apply</button>
             </div>
           </div>
-          <div id="treePreview" class="rs" style="margin:8px 0"></div>
-          <div style="max-height:56vh;overflow:auto;margin-top:8px">
-            <table id="orgTable"><thead><tr><th></th><th>Current</th><th>Proposed</th><th>Why</th><th>Conf.</th></tr></thead><tbody></tbody></table>
+          <div style="max-height:50vh;overflow:auto;margin-top:8px">
+            <table id="orgTable"><thead><tr><th></th><th>Current</th><th>Proposed location &amp; name</th><th>Why</th><th>Conf.</th></tr></thead><tbody></tbody></table>
           </div>
         </div>
       </div>
@@ -280,8 +313,10 @@ async function warmModel(){
 }
 // quality = is the 12B model selected?
 function q(){ const s=$('#modelSel'); return s && s.value.includes('12b'); }
+let orgInit=false;
 function tab(v){ $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===v));
-  $$('.view').forEach(x=>x.classList.remove('active')); $('#v-'+v).classList.add('active'); }
+  $$('.view').forEach(x=>x.classList.remove('active')); $('#v-'+v).classList.add('active');
+  if(v==='organize' && !orgInit){ orgInit=true; browseTo(''); } }
 function toast(m){ const t=$('#toast'); t.textContent=m; t.style.display='block'; setTimeout(()=>t.style.display='none',3200); }
 // fetch JSON with an explicit long timeout + a human error (no bare "Failed to fetch")
 async function jfetch(url, opts={}, timeoutMs=360000){
@@ -532,33 +567,82 @@ async function showHipaa(){
 }
 
 /* ---------- ORGANIZE ---------- */
-async function doPlan(){
-  const root=$('#orgRoot').value.trim(); if(!root){toast('enter a folder path');return;}
-  $('#planBtn').innerHTML='<span class="spin"></span> Reading files…';
+let CURDIR='';
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+async function browseTo(path){
   try{
-    const r=await (await fetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,quality:q()})})).json();
-    if(r.error){toast(r.error);$('#planBtn').textContent='Build plan';return;}
-    $('#orgOut').classList.remove('hidden');
-    $('#treePreview').innerHTML = Object.entries(r.tree_preview).map(([k,v])=>`<span class="pill">${k}: ${v}</span>`).join('');
-    const tb=$('#orgTable tbody'); tb.innerHTML='';
-    r.proposals.forEach(p=>{ const tr=document.createElement('tr');
-      tr.innerHTML=`<td><input type="checkbox" checked data-src="${p.src.replace(/"/g,'&quot;')}"></td>
-        <td class="mono">${p.old_name}</td><td class="mono" style="color:var(--accent)">${p.category}/${p.new_name}</td>
-        <td class="rs">${p.reason}</td><td>${(p.confidence*100|0)}%</td>`; tb.appendChild(tr); });
-    $('#planNote').textContent = r.proposals.length+' files planned';
-  }catch(e){ toast('plan failed: '+e); }
-  $('#planBtn').textContent='Build plan';
+    const r=await jfetch('/api/organize/browse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})},30000);
+    CURDIR=r.path||''; $('#curPath').textContent=CURDIR||'This PC';
+    $('#upBtn').style.display = r.parent!==null && CURDIR ? '' : 'none';
+    $('#scanBtnO').style.display = CURDIR ? '' : 'none';
+    const list=$('#dirList'); let html='';
+    if(!CURDIR){
+      html += '<div class="rs" style="margin-bottom:6px">Drives</div>';
+      html += r.drives.map(d=>`<div class="dirItem" onclick="browseTo('${esc(d).replace(/\\/g,'\\\\')}')">💽 ${esc(d)}</div>`).join('');
+      html += '<div class="rs" style="margin:10px 0 6px">Quick access</div>';
+      html += r.shortcuts.map(s=>`<div class="dirItem" onclick="browseTo('${esc(s.path).replace(/\\/g,'\\\\')}')">📁 ${esc(s.name)}</div>`).join('');
+    } else {
+      if(r.file_count) html += `<div class="rs" style="margin-bottom:6px">${r.file_count} file(s) here · ${r.dirs.length} folder(s)</div>`;
+      html += r.dirs.map(d=>`<div class="dirItem" onclick="browseTo('${esc(d.path).replace(/\\/g,'\\\\')}')">📁 ${esc(d.name)}</div>`).join('');
+      if(!r.dirs.length) html += '<div class="rs">No subfolders. Click “Scan this folder”.</div>';
+    }
+    list.innerHTML=html;
+  }catch(e){ toast('browse failed: '+e.message); }
+}
+function browseUp(){ if(CURDIR){ const p=CURDIR.replace(/[\\/]+$/,''); const parent=p.substring(0,Math.max(p.lastIndexOf('\\'),p.lastIndexOf('/'))); browseTo(parent.length>2?parent:(parent+'\\')); } }
+
+async function scanHere(){
+  if(!CURDIR){ toast('pick a folder first'); return; }
+  const profile=$('#profileSel').value;
+  $('#scanBtnO').innerHTML='<span class="spin"></span> Reading first pages…';
+  $('#planNote').textContent='Gemma is reading each file — one at a time.';
+  try{
+    const r=await jfetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({root:CURDIR, profile, quality:q()})}, 600000);
+    if(r.error){ toast(r.error); $('#scanBtnO').textContent='Scan this folder ▸'; return; }
+    renderPlan(r);
+  }catch(e){ toast('scan failed: '+e.message); }
+  $('#scanBtnO').textContent='Scan this folder ▸';
+}
+
+function renderPlan(r){
+  $('#orgOut').classList.remove('hidden');
+  $('#planNote').textContent = `${r.scanned} files scanned · ${r.duplicates.length} duplicate set(s)`;
+  // structure tree
+  $('#treePreview').innerHTML = Object.entries(r.tree_preview).sort().map(([k,v])=>
+    `<div class="treeRow"><span class="mono">${esc(k)}</span><span class="pill">${v}</span></div>`).join('') || '<span class="rs">—</span>';
+  $('#taxReason').innerHTML = '<small class="k">Why this structure:</small> '+esc(r.taxonomy_reason);
+  $('#namingConv').innerHTML = '<small class="k">Naming:</small> <span class="mono">'+esc(r.naming_convention)+'</span>';
+  // duplicates
+  $('#dupPanel').style.display = r.duplicates.length? '' : 'none';
+  $('#dupList').innerHTML = r.duplicates.map(g=>`<div class="item" style="display:block">
+    <div class="rs">keep <b class="mono">${esc(g.keep.split(/[\\/]/).pop())}</b></div>
+    ${g.duplicates.map(d=>`<div class="rs" style="color:var(--warn)">↳ dup: ${esc(d.split(/[\\/]/).pop())}</div>`).join('')}
+    </div>`).join('') || '<span class="rs">none</span>';
+  // file table
+  const tb=$('#orgTable tbody'); tb.innerHTML='';
+  r.proposals.forEach(p=>{ const tr=document.createElement('tr');
+    const loc=(p.category+'/'+(p.subcategory||'')).replace(/\/$/,'')+'/'+p.new_name;
+    tr.innerHTML=`<td><input type="checkbox" checked data-src="${esc(p.src)}"></td>
+      <td class="mono">${esc(p.old_name)}</td>
+      <td class="mono" style="color:${p.is_duplicate?'var(--warn)':'var(--accent)'}">${p.is_duplicate?'🗐 ':''}${esc(loc)}</td>
+      <td class="rs">${esc(p.reason)}</td><td>${(p.confidence*100|0)}%</td>`;
+    tb.appendChild(tr); });
 }
 async function doApply(){
   const excluded=$$('#orgTable tbody input:not(:checked)').map(c=>c.dataset.src);
   $('#applyBtn').innerHTML='<span class="spin"></span> Moving…';
-  const r=await (await fetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({excluded})})).json();
+  try{
+    const r=await jfetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({excluded})},120000);
+    toast('Moved '+r.moved+' files'+(r.skipped.length?(' · skipped '+r.skipped.length):'')+'. Undo is ready.');
+  }catch(e){ toast('apply failed: '+e.message); }
   $('#applyBtn').textContent='Apply';
-  toast('Moved '+r.moved+' files'+(r.skipped.length?(' · skipped '+r.skipped.length):'')+'. Undo is ready.');
 }
 async function doUndo(){
-  const r=await (await fetch('/api/organize/undo',{method:'POST'})).json();
-  toast('Restored '+r.restored+' files to their original locations.');
+  try{ const r=await jfetch('/api/organize/undo',{method:'POST'},120000);
+    toast('Restored '+r.restored+' files to their original locations.');
+  }catch(e){ toast('undo failed: '+e.message); }
 }
 </script>
 </body>

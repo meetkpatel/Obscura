@@ -106,18 +106,48 @@ class FileProposal(BaseModel):
     old_name: str
     new_name: str
     category: str = "other"
+    subcategory: str = ""
     doc_type: str = "unknown"
     topic: str = ""
+    patient: str = ""                    # healthcare: whose record this is
     reason: str = ""
     confidence: float = 0.5
     quick_hash: str = ""
+    is_duplicate: bool = False           # exact copy of another kept file
     excluded: bool = False
+
+
+class DuplicateGroup(BaseModel):
+    sha: str
+    size: int
+    keep: str                            # the copy to keep
+    duplicates: list[str]                # exact copies proposed for removal
 
 
 class OrganizePlan(BaseModel):
     root: str
+    profile: str = "general"             # "healthcare" | "general"
     proposals: list[FileProposal]
     tree_preview: dict = Field(default_factory=dict)
+    duplicates: list[DuplicateGroup] = Field(default_factory=list)
+    naming_convention: str = ""
+    taxonomy_reason: str = ""
+    scanned: int = 0
+
+
+class DirEntry(BaseModel):
+    name: str
+    path: str
+    file_count: int = 0
+
+
+class DirListing(BaseModel):
+    path: str
+    parent: Optional[str] = None
+    dirs: list[DirEntry] = Field(default_factory=list)
+    file_count: int = 0
+    drives: list[str] = Field(default_factory=list)
+    shortcuts: list[DirEntry] = Field(default_factory=list)
 
 
 class JournalEntry(BaseModel):

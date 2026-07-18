@@ -302,14 +302,21 @@ def secure_scan(body: dict = Body(default={})):
 # Phase 3 — ORGANIZE
 # --------------------------------------------------------------------------
 
+@app.post("/api/organize/browse")
+def organize_browse(body: dict = Body(default={})):
+    """In-app directory browser. body={path} or empty for the 'This PC' view."""
+    return p3.browse(body.get("path")).model_dump()
+
+
 @app.post("/api/organize/plan")
 def organize_plan(body: dict = Body(...)):
     root = body.get("root")
     quality = body.get("quality", False)
+    profile = body.get("profile", "healthcare")
     if not root or not os.path.isdir(root):
         return JSONResponse({"error": f"not a folder: {root}"}, status_code=400)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    plan = p3.build_plan(root, model, limit=body.get("limit", 200))
+    plan = p3.build_plan(root, model, profile=profile, limit=body.get("limit", 200))
     STATE["plan"] = plan
     return plan.model_dump()
 
