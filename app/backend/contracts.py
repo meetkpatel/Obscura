@@ -85,6 +85,8 @@ class Finding(BaseModel):
     requires_admin: bool = False
     reversible: bool = False
     path: Optional[str] = None           # for secrets-on-disk -> "send to Redactor"
+    line: Optional[int] = None           # secrets-on-disk: line the match is on
+    preview: Optional[str] = None        # secrets-on-disk: masked value (AKIA****)
     can_redact: bool = False
 
 
@@ -94,6 +96,8 @@ class ScanResult(BaseModel):
     score_breakdown: dict
     admin: bool
     generated_offline: bool = True
+    # secrets sweep coverage — so "clean" is honest, not silently truncated
+    scan_stats: dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

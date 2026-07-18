@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import psutil
@@ -93,47 +94,149 @@ SCAN_EXTS = {".env", ".txt", ".json", ".yaml", ".yml", ".ini", ".cfg", ".config"
              ".py", ".js", ".ts", ".sh", ".ps1", ".pem", ".key", ".csv", ".md", ""}
 MAX_FILE = 1_000_000  # 1 MB — secrets live in small config files
 
+# Template/example files are documentation, not live config. A "secret" here is a
+# placeholder by definition — skip the whole file to cut the biggest noise source.
+TEMPLATE_MARKERS = (".example", ".sample", ".template", ".tmpl", ".dist")
 
-def scan_secrets(roots: list[str], limit=2000) -> list[Finding]:
-    findings, seen, checked = [], set(), 0
+# Values that are obviously placeholders, not real credentials. Anchored so only
+# an EXACT placeholder value is dropped (a real key that merely contains one of
+# these as a substring still fires). Plus a loose "example" catch for the famous
+# AWS docs key `AKIAIOSFODNN7EXAMPLE`, the single most common false positive.
+_PLACEHOLDER_VALUE = re.compile(
+    r"(?i)^(?:"
+    r"x{3,}|\*{3,}|\.{3,}|0{3,}|"
+    r"change[-_ ]?me|examples?|samples?|dummy|placeholder|redacted|"
+    r"your[-_ ]?(?:password|secret|key|token|api[-_ ]?key)|"
+    r"password|passwd|secret|token|test(?:ing)?|none|null|todo|fixme|"
+    r"<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|%[^%]*%"
+    r")$"
+)
+
+
+def _is_template_file(fn: str) -> bool:
+    low = fn.lower()
+    return any(low.endswith(m) or f"{m}." in low for m in TEMPLATE_MARKERS)
+
+
+def _secret_value(match_text: str) -> str:
+    """Pull the credential value out of a match for masking/placeholder tests.
+    For `password = "x"` forms take the quoted/RHS value; else the match is the
+    secret itself (AKIA..., a token, a JWT)."""
+    q = re.findall(r"['\"]([^'\"]+)['\"]", match_text)
+    if q:
+        return q[-1].strip()
+    if "=" in match_text or ":" in match_text:
+        return re.split(r"[:=]", match_text, 1)[-1].strip().strip("'\"")
+    return match_text.strip()
+
+
+def _is_placeholder(value: str) -> bool:
+    return "example" in value.lower() or bool(_PLACEHOLDER_VALUE.match(value))
+
+
+def _mask(value: str, keep=4) -> str:
+    value = value.strip()
+    if len(value) <= keep:
+        return "*" * len(value)
+    return value[:keep] + "*" * min(8, len(value) - keep)
+
+
+def _line_of(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _collect_files(roots: list[str], limit: int) -> tuple[list[Path], bool]:
+    """Walk `roots` and return (candidate scannable files, limit_hit). Stops the
+    walk entirely once `limit` files are collected — the old code only broke the
+    inner loop and kept traversing the whole tree for nothing."""
+    paths: list[Path] = []
+    seen: set[str] = set()
     for root in roots:
         rp = Path(root).expanduser()
         if not rp.exists():
             continue
         for dirpath, dirnames, filenames in os.walk(rp):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+            dirnames[:] = [d for d in dirnames
+                           if d not in SKIP_DIRS and not d.startswith(".")]
             for fn in filenames:
-                if checked >= limit:
-                    break
                 fp = Path(dirpath) / fn
-                if fp.suffix.lower() not in SCAN_EXTS:
+                if fp.suffix.lower() not in SCAN_EXTS or _is_template_file(fn):
                     continue
-                try:
-                    if fp.stat().st_size > MAX_FILE:
-                        continue
-                    text = fp.read_text(encoding="utf-8", errors="ignore")
-                except Exception:
+                sp = str(fp)
+                if sp in seen:
                     continue
-                checked += 1
-                for name, pat in SECRET_PATTERNS:
-                    if pat.search(text):
-                        key = (str(fp), name)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        reg = FIX_REGISTRY["secret_on_disk"]
-                        findings.append(Finding(
-                            id=f"secret_{len(findings)}",
-                            collector="secrets_on_disk",
-                            title=f"{name} found in {fp.name}",
-                            severity="critical" if "key" in name.lower()
-                                     or "private" in name.lower() else "high",
-                            detail=f"Pattern '{name}' matched in {fp}",
-                            remediation=reg["remediation"],
-                            requires_admin=False, reversible=False,
-                            path=str(fp), can_redact=True,
-                        ))
-    return findings
+                seen.add(sp)
+                paths.append(fp)
+                if len(paths) >= limit:
+                    return paths, True
+    return paths, False
+
+
+def _scan_file(fp: Path) -> tuple[list[dict], str]:
+    """Scan ONE file. Returns (raw hits, status). Status feeds honest coverage
+    stats: 'scanned' | 'skipped_large' | 'unreadable'."""
+    try:
+        if fp.stat().st_size > MAX_FILE:
+            return [], "skipped_large"
+        text = fp.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return [], "unreadable"
+    hits, seen = [], set()
+    for name, pat in SECRET_PATTERNS:
+        for m in pat.finditer(text):          # every occurrence, not just the first
+            value = _secret_value(m.group(0))
+            if _is_placeholder(value):
+                continue
+            masked = _mask(value)
+            key = (name, masked)
+            if key in seen:                    # collapse identical repeats in one file
+                continue
+            seen.add(key)
+            hits.append({"name": name, "line": _line_of(text, m.start()),
+                         "masked": masked})
+    return hits, "scanned"
+
+
+def scan_secrets(roots: list[str], limit=2000) -> tuple[list[Finding], dict]:
+    """Fan the per-file scan across a thread pool (I/O-bound) and report coverage
+    so a truncated sweep can't masquerade as 'clean'. Returns (findings, stats)."""
+    paths, limit_hit = _collect_files(roots, limit)
+    scanned = skipped_large = unreadable = 0
+    findings: list[Finding] = []
+    reg = FIX_REGISTRY["secret_on_disk"]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for fp, (raw, status) in zip(paths, ex.map(_scan_file, paths)):
+            if status == "scanned":
+                scanned += 1
+            elif status == "skipped_large":
+                skipped_large += 1
+            else:
+                unreadable += 1
+            for r in raw:
+                nm = r["name"]
+                findings.append(Finding(
+                    id=f"secret_{len(findings)}",
+                    collector="secrets_on_disk",
+                    title=f"{nm} found in {fp.name}",
+                    severity="critical" if "key" in nm.lower()
+                             or "private" in nm.lower() else "high",
+                    detail=f"{nm} at {fp}:{r['line']} — value {r['masked']}",
+                    remediation=reg["remediation"],
+                    requires_admin=False, reversible=False,
+                    path=str(fp), line=r["line"], preview=r["masked"],
+                    can_redact=True,
+                ))
+    stats = {
+        "files_scanned": scanned,
+        "files_skipped_large": skipped_large,
+        "files_unreadable": unreadable,
+        "scan_limit": limit,
+        "limit_hit": limit_hit,
+        "coverage_note": (f"Scan limit of {limit} files reached — more files remain "
+                          f"unscanned. Raise the limit or scan narrower roots for full "
+                          f"coverage." if limit_hit else "All candidate files scanned."),
+    }
+    return findings, stats
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +442,8 @@ def safety_score(findings: list[Finding]) -> tuple[int, dict]:
 def run_scan(roots: list[str] | None, model: str, use_gemma=True) -> ScanResult:
     roots = roots or [str(Path.home() / "Downloads"), str(Path.home() / "Documents"),
                       str(Path.home() / "Desktop")]
-    findings = scan_secrets(roots) + scan_config() + scan_network() + scan_cis()
+    secrets, scan_stats = scan_secrets(roots)
+    findings = secrets + scan_config() + scan_network() + scan_cis()
     if use_gemma:
         explain(findings, model)
     score, breakdown = safety_score(findings)
@@ -347,4 +451,4 @@ def run_scan(roots: list[str] | None, model: str, use_gemma=True) -> ScanResult:
     findings.sort(key=lambda f: order.get(f.severity, 9))
     return ScanResult(findings=findings, safety_score=score,
                       score_breakdown=breakdown, admin=is_admin(),
-                      generated_offline=True)
+                      generated_offline=True, scan_stats=scan_stats)

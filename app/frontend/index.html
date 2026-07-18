@@ -206,6 +206,7 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
           </div>
           <div class="col panel">
             <strong>Findings</strong>
+            <span class="rs" id="scanCoverage" style="margin-left:10px"></span>
             <div id="findings" style="margin-top:12px"></div>
           </div>
         </div>
@@ -244,6 +245,7 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let PAGES=[], DET=[];
 
 function signIn(){ document.getElementById('login').style.display='none';
@@ -499,11 +501,17 @@ async function doScan(){
     $('#scoreVal').style.color = r.safety_score>=80?'#19c3a5':r.safety_score>=55?'#f2b544':'#ff5c6c';
     $('#scoreBreak').innerHTML = Object.entries(r.score_breakdown).map(([k,v])=>`<span class="pill">${k}: −${v}</span>`).join('')||'clean';
     $('#scanNote').textContent = r.admin?'(admin scan)':'(run as Administrator for full config checks)';
+    const st = r.scan_stats||{};
+    $('#scanCoverage').innerHTML = st.files_scanned!=null
+      ? `${st.files_scanned} files scanned${st.files_skipped_large?`, ${st.files_skipped_large} too large`:''}`
+        + (st.limit_hit?` · <span class="sev sev-medium">coverage limited</span> ${st.coverage_note||''}`:'')
+      : '';
     $('#findings').innerHTML = r.findings.length? r.findings.map(f=>`
       <div class="item"><div style="flex:1">
         <div><span class="sev sev-${f.severity}">${f.severity.toUpperCase()}</span> · <span class="lab">${f.title}</span>
         ${f.can_redact?`<button class="ghost" style="padding:3px 10px;font-size:12px;margin-left:8px" onclick="sendToRedactor('${(f.path||'').replace(/\\/g,'\\\\')}')">→ Send to Redactor</button>`:''}</div>
         <div class="rs">${f.explanation||f.detail}</div>
+        ${f.line!=null?`<div class="rs mono"><span class="k">${esc(f.path||'')}:${f.line}</span> · ${esc(f.preview||'')}</div>`:''}
         ${f.remediation?`<div class="rs"><small class="k">Fix:</small> ${f.remediation} ${f.requires_admin?'<span class="pill">admin</span>':''} ${f.reversible?'<span class="pill">reversible</span>':''}</div>`:''}
       </div></div>`).join('') : '<div class="proofbox pass">✓ No exposure found.</div>';
   }catch(e){ $('#findings').innerHTML='scan failed: '+e; }
