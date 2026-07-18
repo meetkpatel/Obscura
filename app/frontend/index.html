@@ -64,7 +64,7 @@ canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background
 .item .lab{font-weight:650}
 .item .rs{color:var(--muted);font-size:13px}
 .chip{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:700;text-transform:uppercase}
-.c-person{background:#1b2b4d;color:#7fa8ff}.c-gov_id,.c-financial{background:#3d1b28;color:#ff8fa0}
+.c-person,.c-organization{background:#1b2b4d;color:#7fa8ff}.c-gov_id,.c-financial{background:#3d1b28;color:#ff8fa0}
 .c-contact,.c-address,.c-date{background:#123b34;color:#5fe6c8}.c-signature,.c-face,.c-other,.c-medical{background:#2c2340;color:#c59bff}
 .score{font-size:64px;font-weight:800;line-height:1}
 .sev{font-weight:700}.sev-critical{color:var(--crit)}.sev-high{color:#ff9a5c}.sev-medium{color:var(--warn)}.sev-low{color:var(--muted)}
@@ -121,6 +121,17 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
     <section class="view active" id="v-redact">
       <h2>Redact a document</h2>
       <p class="sub">Gemma 4 + deterministic rules find every sensitive item, on this laptop. You approve. We destroy the pixels — no recoverable text layer.</p>
+      <div class="panel" id="hwPanel" style="margin-bottom:16px">
+        <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div>
+            <strong>Detection model</strong>
+            <div class="rs" id="hwInfo"><span class="spin"></span> detecting your hardware…</div>
+          </div>
+          <div class="flex">
+            <select id="modelSel" class="field" style="width:auto;margin:0"></select>
+          </div>
+        </div>
+      </div>
       <div class="drop" id="drop" onclick="document.getElementById('fi').click()">
         <div style="font-size:17px">Drop a PDF or image here, or click to choose</div>
         <div style="margin-top:6px">Try <span class="mono">demo-data/sample-foia.png</span></div>
@@ -131,7 +142,7 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
           <div class="col panel">
             <div class="flex" style="justify-content:space-between;margin-bottom:10px">
               <strong>Document</strong>
-              <label class="flex" style="font-size:13px;color:var(--muted)"><input type="checkbox" id="qmode"> quality mode (12B)</label>
+              <span class="rs mono" id="activeModel"></span>
             </div>
             <canvas id="cv"></canvas>
             <div style="margin-top:12px" id="proof"></div>
@@ -203,11 +214,35 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let PAGES=[], DET=[];
 
 function signIn(){ document.getElementById('login').style.display='none';
-  document.getElementById('app').style.display='block'; health(); }
+  document.getElementById('app').style.display='block'; health(); loadHardware(); }
+
+let HW=null;
+async function loadHardware(){
+  try{
+    HW = await (await fetch('/api/hardware')).json();
+    const sel=$('#modelSel'); sel.innerHTML='';
+    HW.models.forEach(m=>{
+      const offered = m.always_available || m.offered;
+      const o=document.createElement('option');
+      o.value=m.id; o.disabled=!offered;
+      const rec = (m.id===HW.recommended_model)?'  ✓ recommended':'';
+      o.textContent = m.label + (offered?rec:'  (needs a bigger GPU)');
+      if(m.id===HW.recommended_model) o.selected=true;
+      sel.appendChild(o);
+    });
+    const twelve = HW.can_run_12b ? 'Your machine can run the 12B model.' : 'The 12B model is not recommended here.';
+    $('#hwInfo').innerHTML = `<b>${HW.gpu}</b>${HW.vram_gb?(' · '+HW.vram_gb+' GB VRAM'):''} · ${HW.ram_gb} GB RAM · ${HW.cores} cores<br>`
+      + `<span style="color:var(--accent)">${twelve}</span> ${HW.reason}`;
+    updateActiveModel();
+    sel.onchange=updateActiveModel;
+  }catch(e){ $('#hwInfo').textContent='hardware probe failed: '+e; }
+}
+function updateActiveModel(){ const el=$('#activeModel'); if(el) el.textContent=$('#modelSel').value; }
+// quality = is the 12B model selected?
+function q(){ const s=$('#modelSel'); return s && s.value.includes('12b'); }
 function tab(v){ $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===v));
   $$('.view').forEach(x=>x.classList.remove('active')); $('#v-'+v).classList.add('active'); }
-function toast(m){ const t=$('#toast'); t.textContent=m; t.style.display='block'; setTimeout(()=>t.style.display='none',2600); }
-function q(){ return $('#qmode') && $('#qmode').checked; }
+function toast(m){ const t=$('#toast'); t.textContent=m; t.style.display='block'; setTimeout(()=>t.style.display='none',3200); }
 
 async function health(){
   try{ const h=await (await fetch('/api/health')).json();
@@ -229,40 +264,59 @@ const drop=$('#drop');
 ;['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
 drop.addEventListener('drop',e=>{ if(e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
 
-let CUR=0;
+let CUR=0, DETECTED=[];
 async function onFile(f){
   if(!f) return;
   $('#redactWork').classList.remove('hidden');
-  $('#items').innerHTML='<div class="rs"><span class="spin"></span> Gemma is reading the document… (large scans on quality mode can take a while)</div>';
+  $('#items').innerHTML='<div class="rs"><span class="spin"></span> Rendering pages…</div>';
   const fd=new FormData(); fd.append('file',f);
   try{
-    const resp=await fetch('/api/redact/detect?quality='+(q()?1:0),{method:'POST',body:fd});
-    const r=await resp.json();
+    const r=await (await fetch('/api/redact/load',{method:'POST',body:fd})).json();
     if(r.error){ $('#items').innerHTML='<div class="proofbox">⚠ '+r.error+'</div>'; return; }
-    PAGES=r.pages; CUR=0; renderPage(0);
-    if(r.note) toast(r.note);
-    renderPager(r.page_count||PAGES.length);
+    PAGES=r.pages.map(p=>({...p, boxes:null})); DETECTED=PAGES.map(()=>false);
+    CUR=0; renderPager(r.page_count);
+    await detectPage(0);          // one page at a time — start with page 1
+  }catch(e){ $('#items').innerHTML='<div class="proofbox">⚠ Load failed: '+e+'</div>'; }
+}
+
+async function detectPage(i){
+  renderImage(i);
+  if(DETECTED[i]){ renderItems(i); return; }
+  $('#items').innerHTML=`<div class="rs"><span class="spin"></span> ${$('#modelSel').value.includes('12b')?'Gemma 12B':'Gemma 4'} reading page ${i+1}… (one page at a time)</div>`;
+  try{
+    const r=await (await fetch('/api/redact/detect_page',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({index:i, quality:q()})})).json();
+    if(r.error){ $('#items').innerHTML='<div class="proofbox">⚠ '+r.error+'</div>'; return; }
+    PAGES[i].boxes=r.boxes; DETECTED[i]=true;
+    if(r.note) toast('Page '+(i+1)+': '+r.note);
+    if(CUR===i){ renderImage(i); renderItems(i); }
   }catch(e){ $('#items').innerHTML='<div class="proofbox">⚠ Detection failed: '+e+'</div>'; }
 }
+
 function renderPager(n){
   let p=$('#pager'); if(!p){ p=document.createElement('div'); p.id='pager'; p.className='flex'; p.style.margin='10px 0';
     $('#cv').parentElement.insertBefore(p,$('#cv')); }
   if(n<=1){ p.innerHTML=''; return; }
   p.innerHTML=`<button class="ghost" onclick="pg(-1)">‹ Prev</button>
     <span class="rs">Page <b id="pgn">${CUR+1}</b> of ${n}</span>
-    <button class="ghost" onclick="pg(1)">Next ›</button>`;
+    <button class="ghost" onclick="pg(1)">Next ›</button>
+    <button class="ghost" onclick="detectAll()" title="Detect every page now">Detect all pages</button>`;
 }
-function pg(d){ CUR=Math.max(0,Math.min(PAGES.length-1,CUR+d)); renderPage(CUR);
-  const e=$('#pgn'); if(e) e.textContent=CUR+1; }
+function pg(d){ CUR=Math.max(0,Math.min(PAGES.length-1,CUR+d)); const e=$('#pgn'); if(e) e.textContent=CUR+1; detectPage(CUR); }
+async function detectAll(){ for(let i=0;i<PAGES.length;i++){ if(!DETECTED[i]){ CUR=i; const e=$('#pgn'); if(e) e.textContent=i+1; await detectPage(i);} } toast('All pages detected.'); }
 
-function renderPage(i){
+function renderImage(i){
   const p=PAGES[i]; const cv=$('#cv'), ctx=cv.getContext('2d');
   const img=new Image();
   img.onload=()=>{ cv.width=img.width; cv.height=img.height; ctx.drawImage(img,0,0); drawBoxes(i); };
   img.src=p.image;
-  const items=$('#items'); items.innerHTML='';
-  $('#detCount').textContent=p.boxes.length+' items · '+(p.stats.regex_hits||0)+' by rules';
-  p.boxes.forEach((b,bi)=>{
+}
+function renderItems(i){
+  const p=PAGES[i]; const items=$('#items'); items.innerHTML='';
+  const boxes=p.boxes||[];
+  $('#detCount').textContent = boxes.length+' items';
+  if(!boxes.length){ items.innerHTML='<div class="proofbox pass">✓ No sensitive items detected on this page.</div>'; return; }
+  boxes.forEach((b,bi)=>{
     const d=document.createElement('div'); d.className='item';
     d.innerHTML=`<input type="checkbox" ${b.accepted?'checked':''} onchange="toggle(${i},${bi},this.checked)">
       <div style="flex:1"><div><span class="chip c-${b.category}">${b.category}</span> <span class="lab">${b.label||''}</span></div>
@@ -271,20 +325,19 @@ function renderPage(i){
   });
 }
 function drawBoxes(i){
-  const cv=$('#cv'), ctx=cv.getContext('2d');
-  PAGES[i].boxes.forEach(b=>{ if(!b.accepted) return;
+  const cv=$('#cv'), ctx=cv.getContext('2d'); const boxes=PAGES[i].boxes||[];
+  boxes.forEach(b=>{ if(!b.accepted) return;
     ctx.strokeStyle='#19c3a5'; ctx.lineWidth=3; ctx.strokeRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1);
     ctx.fillStyle='rgba(25,195,165,.18)'; ctx.fillRect(b.x1,b.y1,b.x2-b.x1,b.y2-b.y1); });
 }
-function toggle(i,bi,v){ PAGES[i].boxes[bi].accepted=v;
-  const cv=$('#cv'),ctx=cv.getContext('2d'); const img=new Image();
-  img.onload=()=>{ctx.drawImage(img,0,0);drawBoxes(i);}; img.src=PAGES[i].image; }
+function toggle(i,bi,v){ PAGES[i].boxes[bi].accepted=v; renderImage(i); }
 
 async function doRedact(){
-  const dec={}; PAGES.forEach((p,i)=>dec[i]=p.boxes.map(b=>b.accepted));
-  $('#redactBtn').innerHTML='<span class="spin"></span> Destroying pixels…';
-  const r=await (await fetch('/api/redact/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dec)})).json();
+  const dec={}; PAGES.forEach((p,i)=>{ if(p.boxes) dec[i]=p.boxes.map(b=>b.accepted); });
+  $('#redactBtn').innerHTML='<span class="spin"></span> Destroying pixels… (detecting any unopened pages)';
+  const r=await (await fetch('/api/redact/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decisions:dec, quality:q()})})).json();
   $('#redactBtn').textContent='Redact & Export';
+  if(r.note) toast(r.note);
   // swap the page images for the redacted previews so the pager shows all pages redacted
   PAGES.forEach((p,i)=>{ if(r.previews[i]){ p.image=r.previews[i]; p.boxes=[]; } });
   const cv=$('#cv'),ctx=cv.getContext('2d'); const img=new Image();

@@ -24,7 +24,7 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from PIL import Image
 
-from contracts import Box, DetectResult
+from contracts import Box, DetectResult, coerce_category
 import gemma
 
 
@@ -75,15 +75,36 @@ def _luhn(num: str) -> bool:
     return checksum % 10 == 0
 
 
+# Deterministic, HIGH-PRECISION rules. Names/addresses/orgs are left to the
+# Gemma pass (context-dependent). These catch the structured identifiers exactly.
 REGEX_RULES: list[tuple[str, str, str]] = [
     # (category, label, pattern)
     ("gov_id", "SSN", r"\b\d{3}-\d{2}-\d{4}\b"),
+    ("gov_id", "EIN/Tax ID", r"\b\d{2}-\d{7}\b"),
+    ("gov_id", "bar/license no.", r"\b(?:VSB|Bar|License|Lic)\s*#?\s*\d{3,7}\b"),
     ("contact", "email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-    ("contact", "phone", r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
+    ("contact", "phone", r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
+    ("address", "P.O. Box", r"\bP\.?\s*O\.?\s*Box\s+\d+\b"),
     ("date", "date", r"\b(?:0?[1-9]|1[0-2])[/\-.](?:0?[1-9]|[12]\d|3[01])[/\-.](?:19|20)\d{2}\b"),
+    ("date", "written date", r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(?:19|20)\d{2}\b"),
     ("financial", "credit card", r"\b(?:\d[ -]?){13,16}\b"),
+    ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*\d{4,}\b"),
+    ("other", "IP address", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     ("contact", "ZIP", r"\b\d{5}(?:-\d{4})?\b"),
 ]
+
+# Grounded PII taxonomy (HIPAA Safe Harbor 18 identifiers + NIST SP 800-122 +
+# common FOIA b(6)/b(7)(C) exemptions). Drives the Gemma prompt below.
+PII_TAXONOMY = (
+    "full personal names (parties, officers, attorneys, notaries, witnesses); "
+    "complete street addresses INCLUDING number, street, suite/unit, city, state, "
+    "and ZIP as ONE span; P.O. boxes; organization / company / firm / employer "
+    "names tied to a person or a party; phone and fax numbers; email addresses; "
+    "SSNs and any government ID or license/bar numbers; financial account, loan, "
+    "policy, deed, or instrument numbers; dates tied to a person (birth, signing, "
+    "recording); handwritten signatures; and any quasi-identifier combination that "
+    "could re-identify a specific person or private party"
+)
 
 
 def regex_hits(text: str) -> list[dict]:
@@ -138,41 +159,52 @@ def _same_line(a: dict, b: dict) -> bool:
     return h > 0 and ov / h > 0.4
 
 
+def _emit_line_boxes(matched: list[dict], hit: dict, pad_frac: float) -> list[Box]:
+    """Split a matched word-run into per-line groups and box each line segment
+    (so a wrapped address becomes one box per line, not a mega-box)."""
+    out: list[Box] = []
+    group: list[dict] = []
+    for w in matched:
+        if group and not _same_line(group[-1], w):
+            out.append(_box_from_words(group, hit, pad_frac))
+            group = []
+        group.append(w)
+    if group:
+        out.append(_box_from_words(group, hit, pad_frac))
+    return out
+
+
+def _box_from_words(ws: list[dict], hit: dict, pad_frac: float) -> Box:
+    x1 = min(w["x1"] for w in ws); y1 = min(w["y1"] for w in ws)
+    x2 = max(w["x2"] for w in ws); y2 = max(w["y2"] for w in ws)
+    padx = int((x2 - x1) * pad_frac) + 2
+    pady = int((y2 - y1) * pad_frac) + 2
+    return Box(x1=x1 - padx, y1=y1 - pady, x2=x2 + padx, y2=y2 + pady,
+              category=hit["category"], label=hit["label"], text=hit["text"],
+              confidence=0.98, source="ocr_grounded",
+              reason=hit.get("reason") or "Matched by deterministic rule.")
+
+
 def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06) -> list[Box]:
-    """Map each regex/string hit to exact OCR word boxes (the minimal consecutive
-    same-line span whose concatenation contains the hit). Returns pixel boxes —
-    no model-grid drift, and no cross-line mega-boxes."""
+    """Map each hit string to exact OCR word boxes. Handles multi-line spans
+    (wrapped addresses) by emitting one box per line segment. No grid drift."""
     boxes: list[Box] = []
-    claimed: set[tuple[str, int]] = set()  # (text, start_word_idx) — dedupe
+    claimed: set[tuple[str, int]] = set()
     for hit in hits:
         target = re.sub(r"\s+", "", hit["text"]).lower()
-        if not target:
+        if len(target) < 2:
             continue
         for i in range(len(words)):
             acc, matched = "", []
-            for j in range(i, min(i + 8, len(words))):
-                if matched and not _same_line(matched[-1], words[j]):
-                    break  # never span lines
+            for j in range(i, min(i + 16, len(words))):   # allow long spans (addresses)
                 acc += re.sub(r"\s+", "", words[j]["text"]).lower()
                 matched.append(words[j])
                 if target in acc:
-                    if (hit["text"], i) in claimed:
-                        break
-                    claimed.add((hit["text"], i))
-                    x1 = min(w["x1"] for w in matched)
-                    y1 = min(w["y1"] for w in matched)
-                    x2 = max(w["x2"] for w in matched)
-                    y2 = max(w["y2"] for w in matched)
-                    padx = int((x2 - x1) * pad_frac) + 2
-                    pady = int((y2 - y1) * pad_frac) + 2
-                    boxes.append(Box(
-                        x1=x1 - padx, y1=y1 - pady, x2=x2 + padx, y2=y2 + pady,
-                        category=hit["category"], label=hit["label"],
-                        text=hit["text"], confidence=0.99, source="ocr_grounded",
-                        reason="Structured identifier matched by deterministic rule.",
-                    ))
+                    if (hit["text"], i) not in claimed:
+                        claimed.add((hit["text"], i))
+                        boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
                     break
-                if len(acc) > len(target) + 4:
+                if len(acc) > len(target) + 6:
                     break
     return boxes
 
@@ -199,15 +231,20 @@ VISION_PROMPT = (
 VISUAL_CATS = {"signature", "face"}
 
 TEXT_ENTITY_PROMPT = (
-    "You are a document privacy reviewer. Read the document text below and list "
-    "every sensitive personal item that a records officer must redact but that a "
-    "simple regex would MISS: full personal names, home/street addresses, employer "
-    "or organization names tied to a person, medical conditions, and any phrase "
-    "that could re-identify a specific individual.\n"
-    "Return ONLY JSON: {\"items\":[{\"text\":\"exact substring copied verbatim from "
-    "the document\",\"category\":\"person|address|medical|other\",\"reason\":\"short\"}]}\n"
-    "Copy each 'text' value EXACTLY as it appears so it can be found in the page. "
-    "If none, return {\"items\":[]}.\n\nDOCUMENT:\n"
+    "You are a meticulous records/FOIA redaction officer. Read the document text "
+    "below and list EVERY sensitive item that should be redacted. Bias toward "
+    "OVER-inclusion — a reviewer removes a false positive with one click, but a "
+    "missed item is a breach. Redact these categories:\n"
+    f"{PII_TAXONOMY}.\n\n"
+    "Rules:\n"
+    "- For an address, return the ENTIRE address as one span (e.g. '1100 Confroy "
+    "Drive, Suite 1, South Boston, Virginia 24592'), not just the ZIP.\n"
+    "- Catch EVERY person name and EVERY company/firm/organization name.\n"
+    "- Copy each 'text' value EXACTLY (verbatim substring) so it can be located.\n"
+    "- List each distinct occurrence you see.\n"
+    "Return ONLY JSON: {\"items\":[{\"text\":\"verbatim substring\",\"category\":"
+    "\"person|address|contact|financial|gov_id|date|medical|other\",\"reason\":"
+    "\"short\"}]}. If none, {\"items\":[]}.\n\nDOCUMENT:\n"
 )
 
 
@@ -225,9 +262,9 @@ def gemma_text_entities(full_text: str, words: list[dict], model: str) -> list[B
     hits = []
     for it in items:
         t = (it.get("text") or "").strip()
-        if 2 <= len(t) <= 80:
-            hits.append({"category": it.get("category", "person"),
-                         "label": it.get("category", "sensitive"),
+        if 2 <= len(t) <= 90:
+            cat = coerce_category(it.get("category", "other"))
+            hits.append({"category": cat, "label": cat,
                          "text": t, "reason": it.get("reason", "")})
     grounded = ground_text_boxes(hits, words)
     # carry the model's reason onto the grounded box + mark provenance
@@ -263,7 +300,7 @@ def gemma_vision_boxes(img: Image.Image, model: str, pad_frac=0.02) -> list[Box]
         pady = int((py2 - py1) * pad_frac) + 3
         boxes.append(Box(
             x1=px1 - padx, y1=py1 - pady, x2=px2 + padx, y2=py2 + pady,
-            category=it.get("category", "other"),
+            category=coerce_category(it.get("category", "other")),
             label=it.get("label", "sensitive"),
             reason=it.get("reason", ""), confidence=0.75, source="gemma_vision",
         ))
@@ -285,13 +322,24 @@ def _iou(a: Box, b: Box) -> float:
     return inter / ua if ua else 0.0
 
 
+def _contained(b: Box, k: Box, frac=0.6) -> bool:
+    """True if >frac of b's area lies inside k (b is a near-duplicate/subset)."""
+    ix1, iy1 = max(b.x1, k.x1), max(b.y1, k.y1)
+    ix2, iy2 = min(b.x2, k.x2), min(b.y2, k.y2)
+    inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    ab = (b.x2 - b.x1) * (b.y2 - b.y1)
+    return ab > 0 and inter / ab > frac
+
+
 def merge(boxes: list[Box], thresh=0.5) -> list[Box]:
-    # prefer higher-confidence (ocr_grounded=0.99) boxes on overlap
-    boxes = sorted(boxes, key=lambda b: -b.confidence)
+    # keep bigger, higher-confidence boxes first; drop overlaps and near-duplicates
+    boxes = sorted(boxes, key=lambda b: (-b.confidence,
+                                         -((b.x2 - b.x1) * (b.y2 - b.y1))))
     kept: list[Box] = []
     for b in boxes:
-        if all(_iou(b, k) < thresh for k in kept):
-            kept.append(b)
+        if any(_iou(b, k) >= thresh or _contained(b, k) for k in kept):
+            continue
+        kept.append(b)
     return kept
 
 
