@@ -477,6 +477,28 @@ def _fsync_write(path: Path, obj) -> None:
         os.fsync(f.fileno())
 
 
+def _safe_move(src: Path, dst: Path) -> None:
+    """Move src -> dst, handling cross-volume safely. Same drive: atomic
+    os.replace. Different drive (os.replace raises): copy to a temp name,
+    VERIFY the copy (size + full SHA-256), then remove the source — so a failure
+    mid-copy never destroys the original (the source is deleted only after the
+    destination is proven identical)."""
+    if src.drive.lower() == dst.drive.lower():
+        os.replace(src, dst)
+        return
+    import shutil
+    tmp = dst.with_name(dst.name + ".obscura-partial")
+    shutil.copy2(src, tmp)                       # copy to a partial name first
+    if tmp.stat().st_size != src.stat().st_size or full_sha(tmp) != full_sha(src):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise OSError("cross-volume copy verification failed — source kept intact")
+    os.replace(tmp, dst)                          # atomic rename within dst volume
+    os.remove(src)                                # only now remove the original
+
+
 def _move_one(p: FileProposal, entries: list, journal_path: str) -> tuple[bool, dict | None]:
     """Move a single proposal, journaled. Returns (moved, skip_info)."""
     src, dst = Path(p.src), Path(p.dst)
@@ -488,14 +510,12 @@ def _move_one(p: FileProposal, entries: list, journal_path: str) -> tuple[bool, 
         while dst.with_stem(f"{dst.stem}-{k}").exists():
             k += 1
         dst = dst.with_stem(f"{dst.stem}-{k}")
-    if src.drive.lower() != dst.drive.lower():
-        return False, {"src": p.src, "why": "cross-volume (out of scope)"}
     entry = {"op": "move", "src": str(src), "dst": str(dst),
              "hash": p.quick_hash, "ts": _now(), "committed": False}
     entries.append(entry)
     _fsync_write(Path(journal_path), entries)      # intent BEFORE the move
     try:
-        os.replace(src, dst)
+        _safe_move(src, dst)
         entry["committed"] = True
         _fsync_write(Path(journal_path), entries)
         return True, None
@@ -640,7 +660,7 @@ def undo(journal_path: str) -> dict:
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             if src.exists():
-                os.replace(src, dst)
+                _safe_move(src, dst)      # reverse the move (cross-volume safe)
                 restored += 1
         except Exception as ex:
             failed.append({"file": str(src), "why": str(ex)})
@@ -662,7 +682,7 @@ def reconcile(journal_path: str) -> dict:
         src, dst = Path(e["src"]), Path(e["dst"])
         if dst.exists() and not src.exists():
             try:
-                os.replace(dst, src); rb += 1
+                _safe_move(dst, src); rb += 1
             except Exception:
                 pass
     return {"rolled_back": rb}

@@ -660,7 +660,7 @@ async function showHipaa(){
 }
 
 /* ---------- ORGANIZE ---------- */
-let CURDIR='';
+let CURDIR='', OVERRIDES={};
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 
 async function browseTo(path){
@@ -785,13 +785,24 @@ function renderPlan(r){
     <div class="rs">keep <b class="mono">${esc(g.keep.split(/[\\/]/).pop())}</b></div>
     ${g.duplicates.map(d=>`<div class="rs" style="color:var(--warn)">↳ dup: ${esc(d.split(/[\\/]/).pop())}</div>`).join('')}
     </div>`).join('') || '<span class="rs">none</span>';
-  // file table
+  // file table — proposed folder is an editable dropdown (manual re-home)
+  OVERRIDES={};
+  const folders=[...new Set((r.proposals||[]).filter(p=>!p.is_duplicate).map(p=>_folderOf(p).segs.join('/')))].sort();
   const tb=$('#orgTable tbody'); tb.innerHTML='';
   r.proposals.forEach(p=>{ const tr=document.createElement('tr');
-    const loc=(p.category+'/'+(p.subcategory||'')).replace(/\/$/,'')+'/'+p.new_name;
+    const cur=_folderOf(p).segs.join('/');
+    let locCell;
+    if(p.is_duplicate){
+      locCell=`<span class="mono" style="color:var(--warn)">🗐 _Duplicates_ForReview/${esc(p.new_name)}</span>`;
+    } else {
+      const opts=folders.map(f=>`<option value="${esc(f)}"${f===cur?' selected':''}>${esc(f)}</option>`).join('');
+      locCell=`<select class="field" style="width:auto;margin:0;padding:5px 8px;font-size:12px" data-src="${esc(p.src)}"
+                onchange="OVERRIDES[this.dataset.src]=this.value">${opts}</select>`
+             +` <span class="mono rs">/ ${esc(p.new_name)}</span>`;
+    }
     tr.innerHTML=`<td><input type="checkbox" checked data-src="${esc(p.src)}"></td>
       <td class="mono">${esc(p.old_name)}</td>
-      <td class="mono" style="color:${p.is_duplicate?'var(--warn)':'var(--accent)'}">${p.is_duplicate?'🗐 ':''}${esc(loc)}</td>
+      <td>${locCell}</td>
       <td class="rs">${esc(p.reason)}</td><td>${(p.confidence*100|0)}%</td>`;
     tb.appendChild(tr); });
 }
@@ -800,7 +811,7 @@ async function doApply(){
   const excluded=$$('#orgTable tbody input:not(:checked)').map(c=>c.dataset.src);
   try{
     const r=await jfetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({excluded, run_mode:runMode()})},30000);
+      body:JSON.stringify({excluded, overrides:OVERRIDES, run_mode:runMode()})},30000);
     if(r.error){ toast(r.error); return; }
     $('#applyProgress').classList.remove('hidden');
     $('#apTitle').textContent='Reorganizing… ('+r.mode+' mode)';

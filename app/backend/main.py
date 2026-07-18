@@ -367,8 +367,13 @@ def organize_apply(body: dict = Body(default={})):
     if not plan:
         return JSONResponse({"error": "no plan built yet"}, status_code=400)
     excl = set(body.get("excluded", []))
+    overrides = body.get("overrides", {}) or {}   # {src: "Folder/Sub"} manual re-home
     for pr in plan.proposals:
         pr.excluded = pr.src in excl
+        folder = overrides.get(pr.src)
+        if folder:
+            safe = os.path.normpath(folder.strip("/\\")).lstrip(".\\/")
+            pr.dst = str(Path(plan.root) / "_Organized" / Path(safe) / pr.new_name)
     mode = body.get("run_mode", "eco")   # idle | eco | now
     return p3.start_apply(plan, JOURNAL, mode)
 
