@@ -41,6 +41,7 @@ STATE: dict = {"pages": [], "detect": [], "plan": None, "redacted_pdf": None}
 def health():
     h = gemma.health()
     h["admin"] = p2.is_admin()
+    h["presidio"] = p1.presidio_detect.available()  # deterministic Scan layer on?
     return h
 
 
@@ -73,29 +74,38 @@ def hardware_probe():
 
 @app.get("/api/egress")
 def egress() -> EgressReport:
-    """Prove nothing leaves: list this process tree's remote connections.
-    Loopback (Ollama) is labeled allowed; anything else is EXTERNAL."""
+    """Prove nothing leaves: list THIS process tree's remote connections.
+
+    Iterate our OWN processes (me + children) and read each one's connections —
+    a process may always inspect itself, so this needs no privileges. The old
+    approach enumerated every process on the machine via psutil.net_connections(),
+    which requires root on macOS and raised AccessDenied. We only ever cared about
+    our own tree anyway. Loopback (Ollama :11434) is allowed; anything else EXTERNAL.
+    """
     conns: list[Connection] = []
     external = 0
     me = psutil.Process()
-    pids = {me.pid} | {c.pid for c in me.children(recursive=True)}
-    for c in psutil.net_connections(kind="inet"):
-        if c.pid not in pids or not c.raddr:
-            continue
-        ip = c.raddr.ip
-        loop = ip.startswith("127.") or ip == "::1"
-        label = "local LLM — allowed" if (loop and c.raddr.port == 11434) \
-            else ("local" if loop else "EXTERNAL")
-        if label == "EXTERNAL":
-            external += 1
+    for p in [me] + me.children(recursive=True):
         try:
-            pname = psutil.Process(c.pid).name()
-        except Exception:
-            pname = "?"
-        conns.append(Connection(
-            pid=c.pid or 0, proc=pname,
-            laddr=f"{c.laddr.ip}:{c.laddr.port}" if c.laddr else "",
-            raddr=f"{ip}:{c.raddr.port}", is_loopback=loop, label=label))
+            # psutil >=6 renamed Process.connections() -> net_connections()
+            reader = getattr(p, "net_connections", None) or p.connections
+            pconns = reader(kind="inet")
+            pname = p.name()
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+        for c in pconns:
+            if not c.raddr:
+                continue
+            ip = c.raddr.ip
+            loop = ip.startswith("127.") or ip == "::1"
+            label = "local LLM — allowed" if (loop and c.raddr.port == 11434) \
+                else ("local" if loop else "EXTERNAL")
+            if label == "EXTERNAL":
+                external += 1
+            conns.append(Connection(
+                pid=p.pid or 0, proc=pname,
+                laddr=f"{c.laddr.ip}:{c.laddr.port}" if c.laddr else "",
+                raddr=f"{ip}:{c.raddr.port}", is_loopback=loop, label=label))
     return EgressReport(
         external_count=external, connections=conns,
         verdict="0 external connections — the document never left this machine."
