@@ -419,14 +419,19 @@ async function detectPage(i){
 }
 
 function renderPager(n){
+  // Insert the pager ABOVE the canvas wrapper — not inside it — so the absolutely
+  // positioned #hud badge can't cover the ‹ Prev button and page counter.
   let p=$('#pager'); if(!p){ p=document.createElement('div'); p.id='pager'; p.className='flex'; p.style.margin='10px 0';
-    $('#cv').parentElement.insertBefore(p,$('#cv')); }
+    const wrap=$('#cvWrap'); wrap.parentElement.insertBefore(p, wrap); }
   if(n<=1){ p.innerHTML=''; return; }
   p.innerHTML=`<button class="ghost" onclick="pg(-1)">‹ Prev</button>
     <span class="rs">Page <b id="pgn">${CUR+1}</b> of ${n}</span>
     <button class="ghost" onclick="pg(1)">Next ›</button>
     <button class="ghost" onclick="detectAll()" title="Detect every page now">Detect all pages</button>`;
 }
+// Total sensitive items found across every detected page in the file.
+function totalDetected(){ return PAGES.reduce((s,p)=>s+((p.boxes||[]).length),0); }
+function allDetected(){ return PAGES.length>0 && DETECTED.every(Boolean); }
 function pg(d){ CUR=Math.max(0,Math.min(PAGES.length-1,CUR+d)); const e=$('#pgn'); if(e) e.textContent=CUR+1; detectPage(CUR); }
 async function detectAll(){
   // Walk through every page: flip to it, detect if needed, show its boxes, hold
@@ -445,7 +450,8 @@ async function detectAll(){
     await renderImage(i); renderItems(i);
     await new Promise(r=>setTimeout(r, 200));   // brief hold so the page flip is visible
   }
-  toast('All '+PAGES.length+' pages detected — use ‹ Prev / Next › to review.');
+  renderItems(CUR);   // refresh the count to show the file-wide total
+  toast('Detected '+totalDetected()+' items across '+PAGES.length+' pages.');
 }
 
 async function renderImage(i){
@@ -466,7 +472,10 @@ function drawBox(ctx,b,glow){
 function renderItems(i){
   const p=PAGES[i]; const items=$('#items'); items.innerHTML='';
   const boxes=p.boxes||[];
-  $('#detCount').textContent = boxes.length+' items';
+  // Show the file-wide total once every page is detected; per-page otherwise.
+  $('#detCount').textContent = (PAGES.length>1 && allDetected())
+    ? `${boxes.length} on this page · ${totalDetected()} total in file`
+    : `${boxes.length} items`;
   if(!boxes.length){ items.innerHTML='<div class="proofbox pass">✓ No sensitive items detected on this page.</div>'; return; }
   boxes.forEach((b,bi)=>{
     const d=document.createElement('div'); d.className='item';
