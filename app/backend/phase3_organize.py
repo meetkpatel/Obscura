@@ -352,11 +352,16 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
     proposals: list[FileProposal] = []
     used: set[str] = set()
     tree: dict = {}
+    # Classify one file at a time. (Measured: batching multiple files into one
+    # Gemma call is SLOWER on this hardware — the larger combined response costs
+    # more than the per-call overhead it saves — so per-file wins. The real speed
+    # levers are E4B-as-default, the hash cache, and skipping duplicates.)
     for fp in files:
         if gate and not gate.wait():   # stay polite during a big scan
             break
         is_dup = str(fp) in dup_paths
-        meta = classify(fp, model, cache, profile) if not is_dup else {"doc_type": "duplicate", "confidence": 1.0}
+        meta = classify(fp, model, cache, profile) if not is_dup \
+            else {"doc_type": "duplicate", "confidence": 1.0}
         if is_dup:
             dst = str(Path(root) / "_Duplicates_ForReview" / fp.name)
             proposals.append(FileProposal(
