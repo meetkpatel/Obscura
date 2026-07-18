@@ -184,6 +184,83 @@ def _reg(r: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Collector: CIS Level 1 baseline (Windows). Grounded in the CIS Microsoft
+# Windows 11 Benchmark / NIST hardening guidance. High-value, laptop-relevant
+# controls; each check degrades gracefully and never breaks the scan.
+# ---------------------------------------------------------------------------
+
+def scan_cis() -> list[Finding]:
+    if not IS_WIN:
+        return []
+    f: list[Finding] = []
+
+    # 1. SMBv1 — legacy protocol behind EternalBlue / WannaCry / NotPetya.
+    smb1 = _ps("$s=(Get-SmbServerConfiguration -ErrorAction SilentlyContinue).EnableSMB1Protocol;"
+               "$o=(Get-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -ErrorAction SilentlyContinue).State;"
+               "\"$s|$o\"")
+    if "True" in smb1 or "Enabled" in smb1:
+        f.append(Finding(id="smb1", collector="cis", title="SMBv1 legacy protocol is enabled",
+                         severity="critical",
+                         detail="SMBv1 is the vector for EternalBlue/WannaCry/NotPetya.",
+                         remediation="Disable SMBv1: Disable-WindowsOptionalFeature -Online "
+                                     "-FeatureName SMB1Protocol. Breaks only legacy NAS/printers.",
+                         requires_admin=True, reversible=True))
+
+    # 2. PowerShell v2 — bypasses AMSI + ScriptBlock logging; malware favorite.
+    psv2 = _ps("(Get-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2 "
+               "-ErrorAction SilentlyContinue).State")
+    if psv2 == "Enabled":
+        f.append(Finding(id="psv2", collector="cis",
+                         title="Legacy PowerShell v2 is installed",
+                         severity="high",
+                         detail="PS v2 evades AMSI and ScriptBlock logging.",
+                         remediation="Remove it: Disable-WindowsOptionalFeature -Online "
+                                     "-FeatureName MicrosoftWindowsPowerShellV2Root. No modern impact.",
+                         requires_admin=True, reversible=True))
+
+    # 3. Guest account enabled.
+    guest = _ps("(Get-LocalUser -Name 'Guest' -ErrorAction SilentlyContinue).Enabled")
+    if guest == "True":
+        f.append(Finding(id="guest", collector="cis", title="Built-in Guest account is enabled",
+                         severity="medium", detail="Guest allows unauthenticated local access.",
+                         remediation="Disable-LocalUser -Name Guest.",
+                         requires_admin=True, reversible=True))
+
+    # 4. Legacy / risky services running (CIS: reduce attack surface).
+    #    High-risk remote-access services vs low-risk discovery services.
+    high_risk = {"TlntSvr": "Telnet Server", "FTPSVC": "FTP Server", "SNMP": "SNMP",
+                 "RemoteRegistry": "Remote Registry"}
+    low_risk = {"SSDPSRV": "SSDP Discovery", "upnphost": "UPnP Host"}
+    running = _ps("(Get-Service -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Running'})"
+                  ".Name -join ','").lower()
+    hi = [n for s, n in high_risk.items() if running and s.lower() in running]
+    lo = [n for s, n in low_risk.items() if running and s.lower() in running]
+    if hi:
+        f.append(Finding(id="legacy_svc_hi", collector="cis",
+                         title=f"Remote-access services running: {', '.join(hi)}",
+                         severity="medium", detail=f"Running: {', '.join(hi)}",
+                         remediation="Disable services you don't use (Set-Service -StartupType Disabled).",
+                         requires_admin=True, reversible=True))
+    if lo:
+        f.append(Finding(id="legacy_svc_lo", collector="cis",
+                         title=f"Network-discovery services running: {', '.join(lo)}",
+                         severity="low", detail=f"Running: {', '.join(lo)}",
+                         remediation="Optional: disable UPnP/SSDP if you don't use device discovery.",
+                         requires_admin=True, reversible=True))
+
+    # 5. Pending reboot for updates (patch hygiene).
+    pend = _ps("Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\"
+               "Component Based Servicing\\RebootPending'")
+    if pend == "True":
+        f.append(Finding(id="reboot", collector="cis", title="A reboot is pending for updates",
+                         severity="low", detail="Pending servicing operations aren't complete.",
+                         remediation="Restart to finish applying security updates.",
+                         requires_admin=False, reversible=False))
+
+    return f
+
+
+# ---------------------------------------------------------------------------
 # Collector: network — listening ports + owning process (psutil, no admin)
 # ---------------------------------------------------------------------------
 
@@ -229,17 +306,18 @@ def explain(findings: list[Finding], model: str) -> None:
                 "detail": f.detail} for f in findings]
     prompt = (
         "You are a friendly security advisor for a non-technical laptop user. "
-        "For each finding below, write a one-sentence plain-English explanation of "
-        "what it means and why it matters. Return ONLY JSON: "
-        '{"explanations":[{"id":"...","explanation":"..."}]}\n\n'
+        "For each finding below, write ONE short plain-English sentence (max 30 "
+        "words) on what it means and why it matters. Do not repeat words. "
+        "Return ONLY JSON: {\"explanations\":[{\"id\":\"...\",\"explanation\":\"...\"}]}\n\n"
         f"Findings: {payload}"
     )
     try:
-        data = gemma.generate_json(prompt, model=model, num_predict=1024)
+        data = gemma.generate_json(prompt, model=model, num_predict=700)
         by_id = {e["id"]: e.get("explanation", "")
                  for e in data.get("explanations", [])}
         for f in findings:
-            f.explanation = by_id.get(f.id, "")
+            # collapse any degenerate repetition ("protect-less protect-less…")
+            f.explanation = gemma.collapse_repeats(by_id.get(f.id, ""))
     except gemma.GemmaError:
         pass  # explanations are enrichment, not load-bearing
 
@@ -261,7 +339,7 @@ def safety_score(findings: list[Finding]) -> tuple[int, dict]:
 def run_scan(roots: list[str] | None, model: str, use_gemma=True) -> ScanResult:
     roots = roots or [str(Path.home() / "Downloads"), str(Path.home() / "Documents"),
                       str(Path.home() / "Desktop")]
-    findings = scan_secrets(roots) + scan_config() + scan_network()
+    findings = scan_secrets(roots) + scan_config() + scan_network() + scan_cis()
     if use_gemma:
         explain(findings, model)
     score, breakdown = safety_score(findings)
