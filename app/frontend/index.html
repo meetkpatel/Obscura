@@ -31,8 +31,8 @@ button:disabled{opacity:.4;cursor:not-allowed}
   background:radial-gradient(900px 500px at 50% 0%,#10202e,transparent),var(--bg);z-index:50}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:38px;
   width:380px;box-shadow:var(--shadow)}
-.logo{font-size:30px;font-weight:800;letter-spacing:-.5px}
-.logo span{color:var(--accent)}
+.brand-lockup{position:relative;overflow:hidden;width:min(100%,310px);aspect-ratio:3.65/1}
+.brand-lockup img{position:absolute;width:127.5%;max-width:none;height:auto;left:-13.8%;top:-103%}
 .tag{color:var(--muted);margin:6px 0 26px;font-size:15px}
 .field{width:100%;padding:12px 14px;margin-bottom:12px;background:var(--panel2);
   border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit}
@@ -42,7 +42,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 #app{display:none;min-height:100vh}
 header{display:flex;align-items:center;gap:18px;padding:16px 26px;border-bottom:1px solid var(--line);
   position:sticky;top:0;background:#0a0e14ee;backdrop-filter:blur(8px);z-index:10}
-header .logo{font-size:20px}
+header .brand-lockup{width:220px;flex:0 0 auto}
 .tabs{display:flex;gap:6px;margin-left:8px}
 .tab{padding:9px 18px;border-radius:10px;color:var(--muted);font-weight:600;cursor:pointer;border:1px solid transparent}
 .tab.active{color:var(--ink);background:var(--panel);border-color:var(--line)}
@@ -109,7 +109,9 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 <!-- LOGIN (mock) -->
 <div id="login">
   <div class="card">
-    <div class="logo">OBS<span>CURA</span></div>
+    <div class="brand-lockup" role="img" aria-label="Obscura — See what matters. Hide what doesn't.">
+      <img src="/static/brand-lockup.png" alt="">
+    </div>
     <div class="tag">Redaction that never leaves the room.</div>
     <input class="field" id="email" placeholder="officer@agency.gov" value="dana@records.gov">
     <input class="field" id="pw" type="password" placeholder="••••••••" value="demo">
@@ -122,7 +124,9 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 <!-- APP -->
 <div id="app">
   <header>
-    <div class="logo">OBS<span>CURA</span></div>
+    <div class="brand-lockup" role="img" aria-label="Obscura — See what matters. Hide what doesn't.">
+      <img src="/static/brand-lockup.png" alt="">
+    </div>
     <div class="tabs">
       <div class="tab active" data-v="redact" onclick="tab('redact')">REDACT</div>
       <div class="tab" data-v="secure" onclick="tab('secure')">SECURE</div>

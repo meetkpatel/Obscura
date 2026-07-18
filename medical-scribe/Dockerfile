@@ -1,0 +1,69 @@
+# Stage 1: Build the React app
+FROM node:lts-slim AS build
+
+# Set the working directory
+WORKDIR /usr/src/app
+
+# Copy package.json and package-lock.json
+COPY package*.json ./
+
+# Install Node.js dependencies
+RUN npm ci --ignore-scripts
+
+# Copy the rest of the application
+COPY . .
+
+# Build the React app
+RUN npm run build
+
+# Stage 2: Run the FastAPI app
+FROM python:3.12-slim
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv@sha256:03bdc89bb9798628846e60c3a9ad19006c8c3c724ccd2985a33145c039a0577b /uv /usr/local/bin/uv
+
+# Set the working directory
+WORKDIR /usr/src/app
+
+# Set environment variable
+ENV DOCKER_CONTAINER=true
+
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create obscura user
+RUN useradd -m -u 1000 obscura
+
+# Copy the build output and Python server files
+COPY --from=build /usr/src/app/build ./build
+COPY --from=build /usr/src/app/CHANGELOG.md ./CHANGELOG.md
+COPY server/pyproject.toml server/uv.lock ./server/
+
+# Create directories and set ownership
+RUN mkdir -p /usr/src/app/data \
+    /usr/src/app/static \
+    /usr/src/app/temp && \
+    chown -R obscura:obscura /usr/src/app
+
+# Install Python dependencies
+RUN uv pip install --system --no-cache ./server[docker]
+
+# Pre-cache tiktoken encodings so they don't need to be fetched at runtime
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
+# Copy remaining server code
+COPY server/ ./server
+
+# Change permissions
+RUN chown -R obscura:obscura /usr/src/app
+
+# Switch to obscura user
+USER obscura
+
+# Expose necessary ports
+EXPOSE 5000
+
+# Define the command to run the FastAPI app
+# Uses python -m to respect SERVER_HOST environment variable
+CMD ["python", "-m", "server.server"]

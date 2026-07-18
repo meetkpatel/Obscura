@@ -1,0 +1,31 @@
+[project]
+name = "local-clinical-scribe"
+version = "0.1.0"
+description = "A fully local clinical transcription and SOAP drafting MVP"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.128.0",
+    "httpx==0.28.1",
+    "mlx-whisper==0.4.3",
+    "pydantic-settings==2.12.0",
+    "python-multipart==0.0.22",
+    "uvicorn[standard]==0.40.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.0.2",
+    "pytest-asyncio==1.3.0",
+    "ruff==0.14.10",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
