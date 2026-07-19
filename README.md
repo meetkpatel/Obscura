@@ -111,6 +111,41 @@ Then open **http://localhost:8000** (sign in — mock auth, any credentials).
 Turn Wi-Fi off first. Everything still works — click the on-device badge to see the
 egress proof (external connections: 0).
 
+### Companion mode — monitor + dispatch from your phone
+
+Obscura runs long jobs (deep scans, big reorgs). Companion mode lets you walk
+away and keep working in parallel from your phone — watch live progress, get an
+activity feed, dispatch a security scan or an organize plan, and approve the
+plan when it's ready. Same zero-cloud rules apply.
+
+```bash
+# start the server reachable on your network (still token-gated):
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Click **📱 Companion** in the desktop header and scan the QR with your phone
+(same Wi-Fi). That's it.
+
+**Away from home / on cellular:** join both devices to your own
+[Tailscale](https://tailscale.com) (or any WireGuard) network and open the same
+address. The tunnel is end-to-end encrypted, device-to-device — no cloud relay
+ever sees your data, so the confidentiality story is unchanged.
+
+How it stays confidential:
+
+- **No third-party service.** The phone talks directly to your machine. Obscura
+  adds zero egress — verify it live on the Privacy tab (`/api/egress` labels
+  your phone as *inbound, paired* and still counts outbound connections only).
+- **Metadata-first.** The companion API serves job states, counts, scores and
+  file names — never document pages, extracted text, or file contents.
+  Box-by-box redaction review deliberately stays on the desktop.
+- **Paired, not open.** Every non-localhost request must carry the pairing
+  token from the QR; anything else is rejected before any route runs. The token
+  is random, memory-only, and rotates every restart — restarting Obscura
+  unpairs every phone.
+- If port 8000 is taken and you run on another port, also set `OBSCURA_PORT`
+  (e.g. `OBSCURA_PORT=8010`) so the pairing QR encodes the right port.
+
 ### Troubleshooting
 
 - **`MODEL MISSING` badge** — the pulled Ollama tag doesn't match what the app asks

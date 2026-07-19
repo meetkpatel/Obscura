@@ -5,6 +5,7 @@ pymupdf
 pillow
 psutil
 json-repair
+qrcode                     # companion pairing QR (rendered offline, desktop-only)
 presidio-analyzer          # deterministic PII Scan layer for REDACT (on-device)
 spacy                      # NER backend Presidio drives (PERSON/LOCATION/ORG)
 # External: Ollama >= 0.22 with gemma4:e4b-it-qat and gemma4:12b-it-qat pulled.
