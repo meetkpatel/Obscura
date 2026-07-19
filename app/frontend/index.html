@@ -7,57 +7,81 @@
 <style>
 /* Offline by design: zero external fonts, scripts, or styles. */
 :root{
-  --bg:#0a0e14; --panel:#111823; --panel2:#161f2e; --line:#22304a;
-  --ink:#e8eef7; --muted:#8296b3; --accent:#19c3a5; --accent2:#0e8f7c;
+  --bg:#070b12; --bg2:#0b111c; --panel:#0f1723; --panel2:#151f2d; --line:#233047;
+  --ink:#eaf1fb; --muted:#8598b5; --faint:#5f6f8a;
+  --accent:#19c3a5; --accent2:#12a88f; --blue:#5aa0ff; --blueDim:#25406b;
   --warn:#f2b544; --crit:#ff5c6c; --ok:#19c3a5;
-  --shadow:0 10px 40px rgba(0,0,0,.45);
+  --shadow:0 14px 46px rgba(2,8,18,.55); --shadowSm:0 4px 16px rgba(2,8,18,.4);
+  --r:14px; --rSm:10px;
 }
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#12203099,transparent),var(--bg);
-  color:var(--ink);font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
-a{color:var(--accent)}
-button{font:inherit;cursor:pointer;border:none;border-radius:10px;padding:11px 18px;
-  background:var(--accent);color:#052019;font-weight:650;transition:.15s}
-button:hover{background:var(--accent2)}
-button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
-button.ghost:hover{color:var(--ink);border-color:var(--accent)}
-button:disabled{opacity:.4;cursor:not-allowed}
-.badge{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;
-  background:#0d2b26;color:var(--accent);font-size:13px;font-weight:600;border:1px solid #124a41}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+::selection{background:#19c3a555}
+body{margin:0;background:
+  radial-gradient(1100px 560px at 85% -12%,#123a4d55,transparent),
+  radial-gradient(900px 500px at 0% 0%,#12224355,transparent),var(--bg);
+  color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;letter-spacing:.1px}
+a{color:var(--accent);text-decoration:none}
+button{font:inherit;cursor:pointer;border:none;border-radius:var(--rSm);padding:11px 18px;
+  background:linear-gradient(180deg,var(--accent),var(--accent2));color:#052019;font-weight:700;
+  transition:.15s;box-shadow:0 2px 10px #19c3a533}
+button:hover{filter:brightness(1.08);box-shadow:0 4px 18px #19c3a555}
+button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);box-shadow:none}
+button.ghost:hover{color:var(--ink);border-color:var(--accent);background:#0f1a28}
+button:disabled{opacity:.4;cursor:not-allowed;filter:none;box-shadow:none}
+.badge{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:999px;
+  background:#0c241f;color:var(--accent);font-size:12.5px;font-weight:650;border:1px solid #12463c;letter-spacing:.3px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent);animation:pulse 2s infinite}
 
 /* ---- login ---- */
-#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
-  background:radial-gradient(900px 500px at 50% 0%,#10202e,transparent),var(--bg);z-index:50}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:38px;
-  width:380px;box-shadow:var(--shadow)}
-.logo{font-size:30px;font-weight:800;letter-spacing:-.5px}
+#login{position:fixed;inset:0;display:flex;z-index:50;
+  background:radial-gradient(1000px 600px at 30% -10%,#0f2f3f,transparent),var(--bg)}
+.loginSplit{display:flex;width:100%}
+.loginHero{flex:1;display:none;flex-direction:column;justify-content:center;padding:6vw;
+  border-right:1px solid var(--line);background:linear-gradient(160deg,#0c1a2400,#0d2a2633)}
+.loginHero h1{font-size:38px;line-height:1.15;margin:0 0 14px;letter-spacing:-.8px}
+.loginHero p{color:var(--muted);font-size:17px;max-width:440px;line-height:1.5}
+.trustRow{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}
+.loginMain{width:100%;max-width:460px;display:flex;align-items:center;justify-content:center;padding:32px}
+@media(min-width:900px){.loginHero{display:flex}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:40px;
+  width:100%;max-width:400px;box-shadow:var(--shadow)}
+.logo{font-size:28px;font-weight:800;letter-spacing:-.6px;display:inline-flex;align-items:center;gap:10px}
 .logo span{color:var(--accent)}
-.tag{color:var(--muted);margin:6px 0 26px;font-size:15px}
-.field{width:100%;padding:12px 14px;margin-bottom:12px;background:var(--panel2);
-  border:1px solid var(--line);border-radius:10px;color:var(--ink);font:inherit}
-.field:focus{outline:none;border-color:var(--accent)}
+.logoMark{width:30px;height:30px;border-radius:9px;background:linear-gradient(140deg,var(--accent),var(--blue));
+  display:inline-flex;align-items:center;justify-content:center;box-shadow:0 4px 14px #19c3a544;flex:none}
+.logoMark::before{content:"";width:13px;height:13px;border-radius:50%;background:#071018;box-shadow:inset 0 0 0 3px var(--accent)}
+.tag{color:var(--muted);margin:10px 0 26px;font-size:15px}
+.field{width:100%;padding:13px 15px;margin-bottom:12px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:var(--rSm);color:var(--ink);font:inherit;transition:.15s}
+.field:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px #19c3a522}
+.field::placeholder{color:var(--faint)}
 
 /* ---- app shell ---- */
 #app{display:none;min-height:100vh}
-header{display:flex;align-items:center;gap:18px;padding:16px 26px;border-bottom:1px solid var(--line);
-  position:sticky;top:0;background:#0a0e14ee;backdrop-filter:blur(8px);z-index:10}
-header .logo{font-size:20px}
-.tabs{display:flex;gap:6px;margin-left:8px}
-.tab{padding:9px 18px;border-radius:10px;color:var(--muted);font-weight:600;cursor:pointer;border:1px solid transparent}
-.tab.active{color:var(--ink);background:var(--panel);border-color:var(--line)}
+header{display:flex;align-items:center;gap:20px;padding:14px 28px;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:#070b12dd;backdrop-filter:blur(12px);z-index:10}
+header .logo{font-size:19px}
+.tabs{display:flex;gap:4px;margin-left:14px;background:var(--panel2);padding:4px;border-radius:12px;border:1px solid var(--line)}
+.tab{padding:8px 18px;border-radius:9px;color:var(--muted);font-weight:650;cursor:pointer;font-size:14px;
+  transition:.15s;display:flex;align-items:center;gap:7px}
+.tab:hover{color:var(--ink)}
+.tab.active{color:#052019;background:linear-gradient(180deg,var(--accent),var(--accent2));box-shadow:0 2px 8px #19c3a544}
+.tab .tico{font-size:15px}
 .spacer{flex:1}
-main{padding:26px;max-width:1180px;margin:0 auto}
-.view{display:none}.view.active{display:block}
-h2{margin:0 0 4px;font-size:24px}
-.sub{color:var(--muted);margin:0 0 22px}
+main{padding:30px 28px;max-width:1200px;margin:0 auto}
+.view{display:none}.view.active{display:block;animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+h2{margin:0 0 5px;font-size:26px;letter-spacing:-.4px}
+.sub{color:var(--muted);margin:0 0 22px;font-size:15px;max-width:760px;line-height:1.5}
 .grid{display:grid;gap:18px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
-.drop{border:2px dashed var(--line);border-radius:14px;padding:44px;text-align:center;color:var(--muted);
-  transition:.15s;cursor:pointer}
-.drop:hover,.drop.over{border-color:var(--accent);color:var(--ink);background:#0d1a2488}
-.row{display:flex;gap:18px;align-items:flex-start}
-.col{flex:1;min-width:0}
+.panel{background:linear-gradient(180deg,var(--panel),#0d1420);border:1px solid var(--line);
+  border-radius:var(--r);padding:20px;box-shadow:var(--shadowSm)}
+.drop{border:1.5px dashed var(--line);border-radius:var(--r);padding:48px;text-align:center;color:var(--muted);
+  transition:.2s;cursor:pointer;background:#0b121d66}
+.drop:hover,.drop.over{border-color:var(--accent);color:var(--ink);background:#0d1f2277;box-shadow:inset 0 0 40px #19c3a511}
+.row{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+.col{flex:1;min-width:280px}
 canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background:#000}
 .item{display:flex;gap:10px;align-items:flex-start;padding:11px;border:1px solid var(--line);
   border-radius:10px;margin-bottom:9px;background:var(--panel2)}
@@ -74,6 +98,23 @@ canvas{max-width:100%;border-radius:10px;border:1px solid var(--line);background
 .proofbox.pass{border-color:var(--ok);color:var(--ok);background:#08150f}
 .testarea{user-select:text;padding:12px;border:1px dashed var(--line);border-radius:8px;color:var(--muted)}
 .hidden{display:none}
+/* ---- directory browser ---- */
+.dirItem{padding:8px 12px;border-radius:8px;cursor:pointer;border:1px solid transparent;font-size:14px}
+.dirItem:hover{background:var(--panel2);border-color:var(--accent);color:var(--ink)}
+.treeRow{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line)}
+/* ---- visual folder tree ---- */
+.tnode{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:7px;cursor:pointer;font-size:14px;transition:.12s}
+.tnode:hover{background:var(--panel2)}
+.tnode b{color:var(--ink)}
+.tcaret{display:inline-block;width:12px;color:var(--accent);transition:transform .15s;font-size:11px}
+.tfolder.collapsed>.tchildren{display:none}
+.tfolder.collapsed>.tnode .tcaret{transform:rotate(-90deg)}
+.tcount{color:var(--muted);font-size:12px}
+.tfile{display:flex;align-items:center;gap:6px;padding:3px 8px;color:var(--muted);font-size:13px}
+.tfile:hover{color:var(--ink)}
+.tdupflag{color:var(--warn);font-size:11px;font-weight:700}
+.bar{height:10px;background:var(--panel2);border:1px solid var(--line);border-radius:99px;overflow:hidden}
+.barFill{height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .4s;box-shadow:0 0 12px #19c3a5aa}
 /* ---- scanning HUD ---- */
 #cvWrap{border-radius:10px;overflow:hidden}
 .hud{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:8px;
@@ -108,36 +149,61 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 
 <!-- LOGIN (mock) -->
 <div id="login">
-  <div class="card">
-    <div class="logo">OBS<span>CURA</span></div>
-    <div class="tag">Redaction that never leaves the room.</div>
-    <input class="field" id="email" placeholder="officer@agency.gov" value="dana@records.gov">
-    <input class="field" id="pw" type="password" placeholder="••••••••" value="demo">
-    <button style="width:100%" onclick="signIn()">Sign in</button>
-    <div style="text-align:center;margin-top:14px"><span class="badge"><span class="dot"></span>On-device · No network</span></div>
-    <button class="ghost" style="width:100%;margin-top:12px" disabled>SSO (coming soon)</button>
+  <div class="loginSplit">
+    <div class="loginHero">
+      <div class="logo" style="margin-bottom:34px"><span class="logoMark"></span>OBS<span>CURA</span></div>
+      <h1>Your patients' privacy,<br>protected on your own device.</h1>
+      <p>Redact records, harden your machine, and organize your files with on-device AI. Nothing a patient trusts you with ever leaves this computer.</p>
+      <div class="trustRow">
+        <span class="badge"><span class="dot"></span>100% on-device</span>
+        <span class="badge">HIPAA Safe Harbor aware</span>
+        <span class="badge">No cloud · No BAA needed</span>
+        <span class="badge">Open weights · Apache-2.0</span>
+      </div>
+    </div>
+    <div class="loginMain">
+      <div class="card">
+        <div class="logo" style="margin-bottom:2px"><span class="logoMark"></span>OBS<span>CURA</span></div>
+        <div class="tag">Sign in to your on-device workspace.</div>
+        <input class="field" id="email" placeholder="you@clinic.org" value="dana@valleyclinic.org">
+        <input class="field" id="pw" type="password" placeholder="••••••••" value="demo">
+        <button style="width:100%" onclick="signIn()">Sign in securely</button>
+        <div style="text-align:center;margin-top:16px"><span class="badge"><span class="dot"></span>Runs entirely on this machine</span></div>
+        <button class="ghost" style="width:100%;margin-top:12px" disabled>Single sign-on (coming soon)</button>
+      </div>
+    </div>
   </div>
 </div>
 
 <!-- APP -->
 <div id="app">
   <header>
-    <div class="logo">OBS<span>CURA</span></div>
+    <div class="logo"><span class="logoMark"></span>OBS<span>CURA</span></div>
     <div class="tabs">
-      <div class="tab active" data-v="redact" onclick="tab('redact')">REDACT</div>
-      <div class="tab" data-v="secure" onclick="tab('secure')">SECURE</div>
-      <div class="tab" data-v="organize" onclick="tab('organize')">ORGANIZE</div>
+      <div class="tab active" data-v="redact" onclick="tab('redact')"><span class="tico">🛡</span> Redact</div>
+      <div class="tab" data-v="secure" onclick="tab('secure')"><span class="tico">🔒</span> Secure</div>
+      <div class="tab" data-v="organize" onclick="tab('organize')"><span class="tico">🗂</span> Organize</div>
     </div>
     <div class="spacer"></div>
-    <span class="badge" id="egressBadge" onclick="checkEgress()" style="cursor:pointer"><span class="dot"></span><span id="egressText">On-device · No network</span></span>
+    <span class="badge" id="egressBadge" onclick="checkEgress()" style="cursor:pointer" title="Click to verify no data left this machine"><span class="dot"></span><span id="egressText">On-device · No network</span></span>
     <span class="pill mono" id="modelPill">gemma4</span>
+    <span class="badge" id="compBtn" onclick="companionPair()" style="cursor:pointer" title="Monitor + dispatch from your phone — direct connection, no cloud">📱 Companion</span>
   </header>
+
+  <!-- Companion pairing (QR is only ever rendered here, on the desktop) -->
+  <div id="compModal" style="display:none;position:fixed;inset:0;z-index:70;background:#070b12cc;backdrop-filter:blur(6px);align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+    <div class="card" style="max-width:430px;text-align:center">
+      <div class="logo" style="font-size:20px;justify-content:center">Pair your <span>phone</span></div>
+      <div id="compBody" class="tag" style="margin:14px 0 0">Loading…</div>
+      <button class="ghost" style="margin-top:16px" onclick="$('#compModal').style.display='none'">Close</button>
+    </div>
+  </div>
 
   <main>
     <!-- REDACT -->
     <section class="view active" id="v-redact">
-      <h2>Redact a document</h2>
-      <p class="sub">Gemma 4 + deterministic rules find every sensitive item, on this laptop. You approve. We destroy the pixels — no recoverable text layer.</p>
+      <h2>Redact patient records with confidence</h2>
+      <p class="sub">On-device AI finds every identifier a records officer must remove — names, MRNs, SSNs, addresses, dates — and shows you each one. You approve; Obscura destroys the pixels. No recoverable text, no metadata, and a verification report you can keep. Nothing leaves this machine.</p>
       <div class="panel" id="hwPanel" style="margin-bottom:16px">
         <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
           <div>
@@ -193,20 +259,39 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 
     <!-- SECURE -->
     <section class="view" id="v-secure">
-      <h2>Secure this machine</h2>
-      <p class="sub">A read-only, on-device scan for exposure — secrets in plaintext, weak configuration, risky ports. Gemma explains each finding. Nothing is changed without your click.</p>
-      <button onclick="doScan()" id="scanBtn">Run scan</button>
-      <span class="rs" id="scanNote" style="margin-left:12px"></span>
+      <h2>Protect the machine your records live on</h2>
+      <p class="sub">The device holding patient data is part of your security posture. This read-only scan checks security (exposed secrets, weak config, risky services — mapped to CIS Level 1) AND performance (reclaimable space, startup load, updates, cleanup) — the analysis a paid PC optimizer does, on-device, with Gemma explaining every finding. Nothing changes without your click; no risky registry edits.</p>
+      <div class="flex">
+        <button onclick="doScan()" id="scanBtn">Run full scan</button>
+        <label class="flex rs" style="gap:6px"><input type="checkbox" id="deepScan"> deep WinSxS analysis (slower)</label>
+        <span class="rs" id="scanNote"></span>
+      </div>
       <div id="scanOut" class="hidden" style="margin-top:20px">
         <div class="row">
-          <div class="panel" style="text-align:center;min-width:220px">
+          <div class="panel" style="text-align:center;min-width:180px">
             <div class="rs">Safety Score</div>
             <div class="score" id="scoreVal">–</div>
             <div class="rs" id="scoreBreak" style="margin-top:8px"></div>
           </div>
+          <div class="panel" style="text-align:center;min-width:180px">
+            <div class="rs">Performance Score</div>
+            <div class="score" id="perfVal">–</div>
+            <div class="rs" id="reclaimVal" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:16px">
           <div class="col panel">
-            <strong>Findings</strong>
+            <strong>🛡 Security findings</strong>
             <div id="findings" style="margin-top:12px"></div>
+          </div>
+          <div class="col panel">
+            <div class="flex" style="justify-content:space-between">
+              <strong>⚡ Performance &amp; cleanup</strong>
+              <button class="ghost" id="optimizeBtn" onclick="reviewOptimize()" style="padding:6px 12px;font-size:13px;display:none">Review &amp; optimize ▸</button>
+            </div>
+            <div class="rs" id="perfSummary" style="margin:8px 0"></div>
+            <div id="optimizations" style="margin-top:6px"></div>
+            <div class="panel hidden" id="optReview" style="margin-top:12px;background:var(--panel2)"></div>
           </div>
         </div>
       </div>
@@ -214,25 +299,95 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
 
     <!-- ORGANIZE -->
     <section class="view" id="v-organize">
-      <h2>Organize the filesystem</h2>
-      <p class="sub">Gemma reads each file and proposes a clean structure and names. Nothing moves until you Apply — and one click Undoes everything.</p>
-      <div class="flex">
-        <input type="text" id="orgRoot" placeholder="C:\Users\you\Downloads\messy-folder">
-        <button onclick="doPlan()" id="planBtn" style="white-space:nowrap">Build plan</button>
+      <h2>Bring order to your records</h2>
+      <p class="sub">On-device AI reads the first page of every file, maps your current folders, and proposes a clean clinical structure with searchable names — <span class="mono">Date_Patient_DocType</span> — so any record is one search away. It finds exact duplicates, runs gently in the background so it never slows your work, and nothing moves until you approve. One click Undoes everything.</p>
+
+      <!-- directory browser -->
+      <div class="panel" id="browser">
+        <div class="flex" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div class="flex">
+            <button class="ghost" onclick="browseTo('')">🖥 This PC</button>
+            <button class="ghost" id="upBtn" onclick="browseUp()">↑ Up</button>
+            <span class="mono rs" id="curPath" style="max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          </div>
+          <div class="flex" style="flex-wrap:wrap;gap:8px">
+            <select id="scopeSel" class="field" style="width:auto;margin:0" onchange="scopeChanged()">
+              <option value="folder" selected>This folder + subfolders</option>
+              <option value="downloads">Downloads</option>
+              <option value="home">Whole user profile</option>
+            </select>
+            <select id="profileSel" class="field" style="width:auto;margin:0">
+              <option value="healthcare" selected>Healthcare</option>
+              <option value="general">General</option>
+            </select>
+            <select id="layoutSel" class="field" style="width:auto;margin:0" title="How to structure the folders">
+              <option value="by-type" selected>By record type</option>
+              <option value="by-patient">By patient</option>
+            </select>
+            <select id="runModeSel" class="field" style="width:auto;margin:0" title="How hard to run">
+              <option value="eco" selected>Eco (gentle)</option>
+              <option value="idle">Idle-only (pause when you work)</option>
+              <option value="now">Full speed</option>
+            </select>
+            <button onclick="scanHere()" id="scanBtnO">Scan ▸</button>
+          </div>
+        </div>
+        <div id="dirList" style="max-height:30vh;overflow:auto;margin-top:12px"></div>
       </div>
       <span class="rs" id="planNote"></span>
-      <div id="orgOut" class="hidden" style="margin-top:20px">
-        <div class="panel">
+
+      <!-- scan progress -->
+      <div class="panel hidden" id="scanProgress" style="margin-top:14px">
+        <strong>Step 2 · Reading first pages</strong>
+        <div class="bar" style="margin:10px 0"><div class="barFill" id="scanBar"></div></div>
+        <div class="rs mono" id="scanStat"></div>
+      </div>
+
+      <!-- Step 1: existing structure (taxonomy) -->
+      <div class="panel hidden" id="taxoPanel" style="margin-top:14px">
+        <strong>Step 1 · Current structure</strong>
+        <div class="rs" id="taxoSummary" style="margin:6px 0"></div>
+        <div id="taxoAreas" style="max-height:24vh;overflow:auto"></div>
+      </div>
+
+      <!-- apply progress -->
+      <div class="panel hidden" id="applyProgress" style="margin-top:14px">
+        <div class="flex" style="justify-content:space-between">
+          <strong id="apTitle">Reorganizing…</strong>
+          <div class="flex">
+            <button class="ghost" id="pauseBtn" onclick="pauseJob()">Pause</button>
+            <button class="ghost" id="cancelBtn" onclick="cancelJob()">Stop</button>
+          </div>
+        </div>
+        <div class="bar" style="margin:10px 0"><div class="barFill" id="apBar"></div></div>
+        <div class="rs mono" id="apStat"></div>
+      </div>
+
+      <div id="orgOut" class="hidden" style="margin-top:18px">
+        <!-- structure + duplicates summary -->
+        <div class="row">
+          <div class="col panel">
+            <strong>Proposed structure</strong>
+            <div id="treePreview" style="margin-top:8px"></div>
+            <div class="rs" id="taxReason" style="margin-top:10px"></div>
+            <div class="rs" id="namingConv" style="margin-top:8px"></div>
+          </div>
+          <div class="col panel" id="dupPanel" style="max-width:420px">
+            <strong>Duplicates</strong>
+            <div id="dupList" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <!-- file table -->
+        <div class="panel" style="margin-top:16px">
           <div class="flex" style="justify-content:space-between">
             <strong>Proposed renames &amp; moves</strong>
             <div class="flex">
-              <button class="ghost" onclick="doUndo()" id="undoBtn">Undo</button>
+              <button class="ghost" onclick="doUndo()" id="undoBtn">Undo last apply</button>
               <button onclick="doApply()" id="applyBtn">Apply</button>
             </div>
           </div>
-          <div id="treePreview" class="rs" style="margin:8px 0"></div>
-          <div style="max-height:56vh;overflow:auto;margin-top:8px">
-            <table id="orgTable"><thead><tr><th></th><th>Current</th><th>Proposed</th><th>Why</th><th>Conf.</th></tr></thead><tbody></tbody></table>
+          <div style="max-height:50vh;overflow:auto;margin-top:8px">
+            <table id="orgTable"><thead><tr><th></th><th>Current</th><th>Proposed location &amp; name</th><th>Why</th><th>Conf.</th></tr></thead><tbody></tbody></table>
           </div>
         </div>
       </div>
@@ -280,9 +435,26 @@ async function warmModel(){
 }
 // quality = is the 12B model selected?
 function q(){ const s=$('#modelSel'); return s && s.value.includes('12b'); }
+let orgInit=false;
 function tab(v){ $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v===v));
-  $$('.view').forEach(x=>x.classList.remove('active')); $('#v-'+v).classList.add('active'); }
+  $$('.view').forEach(x=>x.classList.remove('active')); $('#v-'+v).classList.add('active');
+  if(v==='organize' && !orgInit){ orgInit=true; browseTo(''); } }
 function toast(m){ const t=$('#toast'); t.textContent=m; t.style.display='block'; setTimeout(()=>t.style.display='none',3200); }
+
+async function companionPair(){
+  $('#compModal').style.display='flex';
+  const b=$('#compBody');
+  try{
+    const r=await jfetch('/api/companion/info');
+    const url=(r.urls&&r.urls[0])||'';
+    b.innerHTML = (r.qr?`<img src="${r.qr}" alt="pairing QR" style="width:230px;border-radius:12px;background:#fff;padding:8px">`:
+        `<div class="proofbox">Install <code>qrcode</code> (pip) for a scannable code — or type the address below on your phone.</div>`)+
+      (url?`<div class="mono" style="margin-top:12px;font-size:12.5px;word-break:break-all;color:var(--muted)">${url}</div>`:
+        `<div class="proofbox">No LAN address found — is Wi-Fi on? Start the server with <code>--host 0.0.0.0</code>.</div>`)+
+      `<div class="rs" style="margin-top:12px;text-align:left">${r.note}</div>
+       <div class="rs" style="margin-top:8px;text-align:left">🔐 Direct device-to-device. The phone sees job status &amp; counts — never your documents. Token rotates on every restart.</div>`;
+  }catch(e){ b.innerHTML='<div class="proofbox">⚠ '+e.message+'</div>'; }
+}
 // fetch JSON with an explicit long timeout + a human error (no bare "Failed to fetch")
 async function jfetch(url, opts={}, timeoutMs=360000){
   const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(), timeoutMs);
@@ -533,25 +705,73 @@ async function doRedact(){
 }
 
 /* ---------- SECURE ---------- */
+function findingHtml(f, extra){
+  return `<div class="item"><div style="flex:1">
+    <div><span class="sev sev-${f.severity}">${f.severity.toUpperCase()}</span> · <span class="lab">${esc(f.title)}</span>${extra||''}</div>
+    <div class="rs">${esc(f.explanation||f.detail)}</div>
+    ${f.remediation?`<div class="rs"><small class="k">Fix:</small> ${esc(f.remediation)} ${f.requires_admin?'<span class="pill">admin</span>':''} ${f.reversible?'<span class="pill">reversible</span>':''}</div>`:''}
+  </div></div>`;
+}
 async function doScan(){
   $('#scanOut').classList.remove('hidden');
-  $('#scanBtn').innerHTML='<span class="spin"></span> Scanning…';
+  $('#scanBtn').innerHTML='<span class="spin"></span> Scanning security + performance…';
   $('#findings').innerHTML='<div class="rs">collecting…</div>';
+  $('#optimizations').innerHTML='<div class="rs">analyzing cleanup…</div>';
   try{
-    const r=await (await fetch('/api/secure/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:q()})})).json();
+    const r=await jfetch('/api/secure/scan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({quality:q(), deep:$('#deepScan').checked})}, 180000);
     $('#scoreVal').textContent=r.safety_score;
     $('#scoreVal').style.color = r.safety_score>=80?'#19c3a5':r.safety_score>=55?'#f2b544':'#ff5c6c';
     $('#scoreBreak').innerHTML = Object.entries(r.score_breakdown).map(([k,v])=>`<span class="pill">${k}: −${v}</span>`).join('')||'clean';
-    $('#scanNote').textContent = r.admin?'(admin scan)':'(run as Administrator for full config checks)';
-    $('#findings').innerHTML = r.findings.length? r.findings.map(f=>`
-      <div class="item"><div style="flex:1">
-        <div><span class="sev sev-${f.severity}">${f.severity.toUpperCase()}</span> · <span class="lab">${f.title}</span>
-        ${f.can_redact?`<button class="ghost" style="padding:3px 10px;font-size:12px;margin-left:8px" onclick="sendToRedactor('${(f.path||'').replace(/\\/g,'\\\\')}')">→ Send to Redactor</button>`:''}</div>
-        <div class="rs">${f.explanation||f.detail}</div>
-        ${f.remediation?`<div class="rs"><small class="k">Fix:</small> ${f.remediation} ${f.requires_admin?'<span class="pill">admin</span>':''} ${f.reversible?'<span class="pill">reversible</span>':''}</div>`:''}
-      </div></div>`).join('') : '<div class="proofbox pass">✓ No exposure found.</div>';
-  }catch(e){ $('#findings').innerHTML='scan failed: '+e; }
-  $('#scanBtn').textContent='Run scan';
+    $('#scanNote').textContent = r.admin?'(admin scan)':'(run as Administrator for full checks)';
+    $('#findings').innerHTML = r.findings.length? r.findings.map(f=>findingHtml(f,
+      f.can_redact?` <button class="ghost" style="padding:3px 10px;font-size:12px;margin-left:6px" onclick="sendToRedactor('${esc((f.path||'').replace(/\\/g,'\\\\'))}')">→ Send to Redactor</button>`:''
+    )).join('') : '<div class="proofbox pass">✓ No exposure found.</div>';
+    // performance
+    $('#perfVal').textContent=r.performance_score;
+    $('#perfVal').style.color = r.performance_score>=80?'#19c3a5':r.performance_score>=55?'#f2b544':'#ff5c6c';
+    const gb=(r.reclaimable_mb/1024);
+    $('#reclaimVal').innerHTML = r.reclaimable_mb>0? `<b style="color:var(--accent)">${gb>=1?gb.toFixed(1)+' GB':r.reclaimable_mb+' MB'}</b> reclaimable` : 'nothing to reclaim';
+    $('#perfSummary').innerHTML = r.perf_summary? `<small class="k">Plan:</small> ${esc(r.perf_summary)}` : '';
+    $('#optimizations').innerHTML = (r.optimizations&&r.optimizations.length)? r.optimizations.map(f=>{
+      const size=f.reclaimable_mb>50?` <span class="pill" style="color:var(--accent)">${f.reclaimable_mb>=1024?(f.reclaimable_mb/1024).toFixed(1)+' GB':f.reclaimable_mb+' MB'}</span>`:'';
+      const fix=f.action_id?` <label class="rs" style="color:var(--accent)"><input type="checkbox" class="optfix" data-aid="${esc(f.action_id)}" checked> one-click fix</label>`:'';
+      return findingHtml(f, size+fix);
+    }).join('') : '<div class="proofbox pass">✓ Clean — nothing to optimize.</div>';
+    // show the optimize button only if there are runnable one-click fixes
+    const anyFix=(r.optimizations||[]).some(f=>f.action_id);
+    $('#optimizeBtn').style.display = anyFix? '' : 'none';
+    $('#optReview').classList.add('hidden');
+  }catch(e){ $('#findings').innerHTML='scan failed: '+e.message; $('#optimizations').innerHTML=''; }
+  $('#scanBtn').textContent='Run full scan';
+}
+function selectedFixes(){ return $$('.optfix:checked').map(c=>c.dataset.aid); }
+async function reviewOptimize(){
+  const ids=selectedFixes();
+  if(!ids.length){ toast('select at least one fix'); return; }
+  const rv=$('#optReview'); rv.classList.remove('hidden');
+  rv.innerHTML='<div class="rs"><span class="spin"></span> Gemma is reviewing the plan for reliability…</div>';
+  try{
+    const r=await jfetch('/api/secure/optimize/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action_ids:ids})},60000);
+    const reviews=(r.evaluation.reviews||[]).map(x=>`<div class="rs" style="margin:3px 0">${x.reliable?'✓':'⚠'} <b>${esc(x.action||'')}</b> — ${esc(x.note||'')}</div>`).join('');
+    rv.innerHTML=`<strong>Self-check — Gemma reviewed its own plan</strong>
+      <div style="margin:8px 0">${reviews}</div>
+      <div class="rs" style="margin-bottom:10px"><small class="k">Overall:</small> ${esc(r.evaluation.overall||'')}</div>
+      <div class="proofbox" style="margin-bottom:10px"><small class="k">These are hardcoded, safe Windows cleanups — no registry edits. Each measures the actual space it frees.</small></div>
+      <button onclick='runOptimize(${JSON.stringify(ids)})'>Run ${ids.length} action${ids.length>1?'s':''} now</button>`;
+  }catch(e){ rv.innerHTML='<div class="proofbox">⚠ review failed: '+e.message+'</div>'; }
+}
+async function runOptimize(ids){
+  const rv=$('#optReview');
+  rv.innerHTML='<div class="rs"><span class="spin"></span> Running + measuring…</div>';
+  try{
+    const r=await jfetch('/api/secure/optimize/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action_ids:ids})},180000);
+    const rows=(r.results||[]).map(x=>`<div class="rs" style="margin:3px 0">${x.ok?'✓':'⚠'} <b>${esc(x.label||x.id)}</b> — ${x.ok?(x.disk_freed_mb>0?x.disk_freed_mb+' MB freed':'done'):esc(x.error||'failed')} <small class="k">(${x.seconds}s)</small></div>`).join('');
+    rv.innerHTML=`<div class="proofbox ${r.verified?'pass':''}"><strong>${r.verified?'✓ Optimization complete — self-verified':'⚠ Completed with issues'}</strong>
+      · disk free ${r.disk_free_before_gb} → ${r.disk_free_after_gb} GB</div>
+      <div style="margin-top:10px">${rows}</div>`;
+    toast('Optimized — '+r.total_freed_mb+' MB freed');
+  }catch(e){ rv.innerHTML='<div class="proofbox">⚠ run failed: '+e.message+'</div>'; }
 }
 function sendToRedactor(path){ tab('redact'); toast('Loaded '+path+' into Redactor (demo: drop the file to redact it).'); }
 
@@ -576,33 +796,201 @@ async function showHipaa(){
 }
 
 /* ---------- ORGANIZE ---------- */
-async function doPlan(){
-  const root=$('#orgRoot').value.trim(); if(!root){toast('enter a folder path');return;}
-  $('#planBtn').innerHTML='<span class="spin"></span> Reading files…';
+let CURDIR='', OVERRIDES={};
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+async function browseTo(path){
   try{
-    const r=await (await fetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,quality:q()})})).json();
-    if(r.error){toast(r.error);$('#planBtn').textContent='Build plan';return;}
-    $('#orgOut').classList.remove('hidden');
-    $('#treePreview').innerHTML = Object.entries(r.tree_preview).map(([k,v])=>`<span class="pill">${k}: ${v}</span>`).join('');
-    const tb=$('#orgTable tbody'); tb.innerHTML='';
-    r.proposals.forEach(p=>{ const tr=document.createElement('tr');
-      tr.innerHTML=`<td><input type="checkbox" checked data-src="${p.src.replace(/"/g,'&quot;')}"></td>
-        <td class="mono">${p.old_name}</td><td class="mono" style="color:var(--accent)">${p.category}/${p.new_name}</td>
-        <td class="rs">${p.reason}</td><td>${(p.confidence*100|0)}%</td>`; tb.appendChild(tr); });
-    $('#planNote').textContent = r.proposals.length+' files planned';
-  }catch(e){ toast('plan failed: '+e); }
-  $('#planBtn').textContent='Build plan';
+    const r=await jfetch('/api/organize/browse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})},30000);
+    CURDIR=r.path||''; $('#curPath').textContent=CURDIR||'This PC';
+    $('#upBtn').style.display = r.parent!==null && CURDIR ? '' : 'none';
+    $('#scanBtnO').style.display = CURDIR ? '' : 'none';
+    const list=$('#dirList'); let html='';
+    if(!CURDIR){
+      html += '<div class="rs" style="margin-bottom:6px">Drives</div>';
+      html += r.drives.map(d=>`<div class="dirItem" onclick="browseTo('${esc(d).replace(/\\/g,'\\\\')}')">💽 ${esc(d)}</div>`).join('');
+      html += '<div class="rs" style="margin:10px 0 6px">Quick access</div>';
+      html += r.shortcuts.map(s=>`<div class="dirItem" onclick="browseTo('${esc(s.path).replace(/\\/g,'\\\\')}')">📁 ${esc(s.name)}</div>`).join('');
+    } else {
+      if(r.file_count) html += `<div class="rs" style="margin-bottom:6px">${r.file_count} file(s) here · ${r.dirs.length} folder(s)</div>`;
+      html += r.dirs.map(d=>`<div class="dirItem" onclick="browseTo('${esc(d.path).replace(/\\/g,'\\\\')}')">📁 ${esc(d.name)}</div>`).join('');
+      if(!r.dirs.length) html += '<div class="rs">No subfolders. Click “Scan this folder”.</div>';
+    }
+    list.innerHTML=html;
+  }catch(e){ toast('browse failed: '+e.message); }
 }
+function browseUp(){ if(CURDIR){ const p=CURDIR.replace(/[\\/]+$/,''); const parent=p.substring(0,Math.max(p.lastIndexOf('\\'),p.lastIndexOf('/'))); browseTo(parent.length>2?parent:(parent+'\\')); } }
+
+function scope(){ return $('#scopeSel').value; }
+function runMode(){ return $('#runModeSel').value; }
+function scopeChanged(){
+  const s=scope();
+  // folder scope needs a picked directory; downloads/home are implicit
+  $('#browser').style.opacity = s==='folder' ? '1' : '.6';
+}
+
+async function scanHere(){
+  const s=scope();
+  if(s==='folder' && !CURDIR){ toast('pick a folder first'); return; }
+  const profile=$('#profileSel').value;
+  $('#scanBtnO').innerHTML='<span class="spin"></span> Mapping…';
+  try{
+    // Step 1 — map the existing structure first (free, instant)
+    const t=await jfetch('/api/organize/taxonomy',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({scope:s, path:CURDIR})}, 60000);
+    if(t.error){ toast(t.error); $('#scanBtnO').textContent='Scan ▸'; return; }
+    $('#taxoPanel').classList.remove('hidden');
+    $('#taxoSummary').innerHTML=`<b>${t.total_files}</b> files across <b>${t.total_areas}</b> areas in <span class="mono">${esc(t.root)}</span>${t.truncated?' (sampled)':''}`;
+    $('#taxoAreas').innerHTML=t.areas.map(a=>`<div class="treeRow"><span class="mono">${esc(a.area)}</span><span class="rs">${a.files} files · ${a.top_types.join(', ')}</span></div>`).join('');
+    // Step 2 — start the background scan (E4B by default: ~1.7x faster than 12B
+    // and just as accurate for filing) and show live per-file progress.
+    $('#scanBtnO').innerHTML='<span class="spin"></span> Reading first pages…';
+    $('#scanProgress').classList.remove('hidden');
+    $('#scanBar').style.width='0%'; $('#scanStat').textContent='starting…';
+    const start=await jfetch('/api/organize/plan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({scope:s, root:CURDIR, profile, layout:$('#layoutSel').value, run_mode:runMode(), quality:false})}, 30000);
+    if(start.error){ toast(start.error); $('#scanBtnO').textContent='Scan ▸'; $('#scanProgress').classList.add('hidden'); return; }
+    await pollScan();
+  }catch(e){ toast('scan failed: '+e.message); }
+  $('#scanBtnO').textContent='Scan ▸';
+}
+let scanPoll=null;
+function pollScan(){
+  return new Promise(resolve=>{
+    clearInterval(scanPoll);
+    scanPoll=setInterval(async()=>{
+      try{
+        const st=await jfetch('/api/organize/plan_status',{},15000);
+        const pct=st.total? Math.round(st.done/st.total*100):0;
+        $('#scanBar').style.width=pct+'%';
+        $('#scanStat').textContent = st.total? `Reading first pages… ${st.done}/${st.total} files (${pct}%)` : 'preparing…';
+        if(st.state==='done'){ clearInterval(scanPoll); $('#scanProgress').classList.add('hidden'); renderPlan(st.plan); resolve(); }
+        else if(st.state==='error'){ clearInterval(scanPoll); $('#scanProgress').classList.add('hidden'); toast('scan failed: '+st.error); resolve(); }
+      }catch(e){ clearInterval(scanPoll); $('#scanProgress').classList.add('hidden'); toast('scan status failed: '+e.message); resolve(); }
+    }, 900);
+  });
+}
+
+// --- visual folder tree ---
+function _folderOf(p){
+  const dst=(p.dst||'').replace(/\\/g,'/');
+  const m=dst.match(/_(Organized|Duplicates_ForReview)\/(.*)/);
+  if(!m) return {segs:[p.category||'Other'], file:p.new_name||p.old_name};
+  const parts=m[2].split('/'); const file=parts.pop();
+  const segs=(m[1]==='Duplicates_ForReview'?['_Duplicates_ForReview']:[]).concat(parts);
+  return {segs, file};
+}
+function _countFiles(node){
+  let n=(node.files||[]).length;
+  for(const k in (node.dirs||{})) n+=_countFiles(node.dirs[k]);
+  return n;
+}
+function _treeNodeHtml(node, name, depth){
+  const cnt=_countFiles(node);
+  let inner='';
+  for(const d of Object.keys(node.dirs||{}).sort()) inner+=_treeNodeHtml(node.dirs[d], d, depth+1);
+  for(const f of (node.files||[])) inner+=`<div class="tfile" style="padding-left:${(depth+1)*18+4}px">📄 <span class="mono">${esc(f.name)}</span>${f.dup?' <span class="tdupflag">dup</span>':''}</div>`;
+  const pad=depth*18;
+  return `<div class="tfolder"><div class="tnode" style="padding-left:${pad}px" onclick="this.parentElement.classList.toggle('collapsed')">`
+    +`<span class="tcaret">▾</span>📁 <b>${esc(name)}</b> <span class="tcount">${cnt}</span></div>`
+    +`<div class="tchildren">${inner}</div></div>`;
+}
+function renderFolderTree(proposals){
+  const root={dirs:{},files:[]};
+  (proposals||[]).forEach(p=>{
+    const {segs,file}=_folderOf(p); let node=root;
+    segs.filter(Boolean).forEach(s=>{ node.dirs=node.dirs||{}; node.dirs[s]=node.dirs[s]||{dirs:{},files:[]}; node=node.dirs[s]; });
+    node.files=node.files||[]; node.files.push({name:file, dup:p.is_duplicate});
+  });
+  let html='<div class="tnode" style="opacity:.7"><span class="tcaret" style="visibility:hidden">▾</span>📂 <b>_Organized</b></div>';
+  for(const d of Object.keys(root.dirs).sort()) html+=_treeNodeHtml(root.dirs[d], d, 1);
+  return html || '<span class="rs">—</span>';
+}
+
+function renderPlan(r){
+  $('#orgOut').classList.remove('hidden');
+  const phi=(r.proposals||[]).filter(p=>p.sensitive).length;
+  const aud=(r.proposals||[]).filter(p=>p.transcribable).length;
+  $('#planNote').innerHTML = `${r.scanned} files scanned · ${r.duplicates.length} duplicate set(s)`
+    + (phi? ` · <span style="color:var(--crit)">🔒 ${phi} contain PHI — Redact before sharing</span>`:'')
+    + (aud? ` · <span style="color:var(--blue)">🎙 ${aud} audio — transcribable on-device</span>`:'')
+    + (r.capped? ` · <span style="color:var(--warn)">⚠ reached the ${r.cap}-file batch cap — run again after applying to continue</span>` : '');
+  // structure tree — visual, expandable, like a file explorer
+  $('#treePreview').innerHTML = renderFolderTree(r.proposals);
+  $('#taxReason').innerHTML = '<small class="k">Why this structure:</small> '+esc(r.taxonomy_reason);
+  $('#namingConv').innerHTML = '<small class="k">Naming:</small> <span class="mono">'+esc(r.naming_convention)+'</span>';
+  // duplicates
+  $('#dupPanel').style.display = r.duplicates.length? '' : 'none';
+  $('#dupList').innerHTML = r.duplicates.map(g=>`<div class="item" style="display:block">
+    <div class="rs">keep <b class="mono">${esc(g.keep.split(/[\\/]/).pop())}</b></div>
+    ${g.duplicates.map(d=>`<div class="rs" style="color:var(--warn)">↳ dup: ${esc(d.split(/[\\/]/).pop())}</div>`).join('')}
+    </div>`).join('') || '<span class="rs">none</span>';
+  // file table — proposed folder is an editable dropdown (manual re-home)
+  OVERRIDES={};
+  const folders=[...new Set((r.proposals||[]).filter(p=>!p.is_duplicate).map(p=>_folderOf(p).segs.join('/')))].sort();
+  const tb=$('#orgTable tbody'); tb.innerHTML='';
+  r.proposals.forEach(p=>{ const tr=document.createElement('tr');
+    const cur=_folderOf(p).segs.join('/');
+    let locCell;
+    if(p.is_duplicate){
+      locCell=`<span class="mono" style="color:var(--warn)">🗐 _Duplicates_ForReview/${esc(p.new_name)}</span>`;
+    } else {
+      const opts=folders.map(f=>`<option value="${esc(f)}"${f===cur?' selected':''}>${esc(f)}</option>`).join('');
+      locCell=`<select class="field" style="width:auto;margin:0;padding:5px 8px;font-size:12px" data-src="${esc(p.src)}"
+                onchange="OVERRIDES[this.dataset.src]=this.value">${opts}</select>`
+             +` <span class="mono rs">/ ${esc(p.new_name)}</span>`;
+    }
+    const badges=(p.sensitive?` <span class="pill" style="color:var(--crit)" title="Likely contains PHI — redact before sharing">🔒 PHI</span>`:'')
+                +(p.transcribable?` <span class="pill" style="color:var(--blue)" title="Audio — transcribable on-device">🎙 audio</span>`:'');
+    tr.innerHTML=`<td><input type="checkbox" checked data-src="${esc(p.src)}"></td>
+      <td class="mono">${esc(p.old_name)}${badges}</td>
+      <td>${locCell}</td>
+      <td class="rs">${esc(p.reason)}</td><td>${(p.confidence*100|0)}%</td>`;
+    tb.appendChild(tr); });
+}
+let apPoll=null;
 async function doApply(){
   const excluded=$$('#orgTable tbody input:not(:checked)').map(c=>c.dataset.src);
-  $('#applyBtn').innerHTML='<span class="spin"></span> Moving…';
-  const r=await (await fetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({excluded})})).json();
-  $('#applyBtn').textContent='Apply';
-  toast('Moved '+r.moved+' files'+(r.skipped.length?(' · skipped '+r.skipped.length):'')+'. Undo is ready.');
+  try{
+    const r=await jfetch('/api/organize/apply',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({excluded, overrides:OVERRIDES, run_mode:runMode()})},30000);
+    if(r.error){ toast(r.error); return; }
+    $('#applyProgress').classList.remove('hidden');
+    $('#apTitle').textContent='Reorganizing… ('+r.mode+' mode)';
+    $('#pauseBtn').textContent='Pause';
+    pollApply();
+  }catch(e){ toast('apply failed: '+e.message); }
 }
+function pollApply(){
+  clearInterval(apPoll);
+  apPoll=setInterval(async()=>{
+    try{
+      const s=await jfetch('/api/organize/apply_status',{},15000);
+      const pct=s.total? Math.round(s.done/s.total*100):0;
+      $('#apBar').style.width=pct+'%';
+      const g=s.gate||{};
+      const gate = g.state==='waiting-idle' ? '⏸ waiting — you\'re working' :
+                   g.state==='waiting-cpu' ? '⏸ waiting — CPU busy ('+g.cpu+'%)' :
+                   g.state==='paused' ? '⏸ paused' : '▶ running';
+      $('#apStat').textContent=`${s.moved}/${s.total} moved · ${gate} · idle ${g.idle_s}s · CPU ${g.cpu}%`;
+      if(s.state==='done'||s.state==='cancelled'){
+        clearInterval(apPoll);
+        $('#apTitle').textContent = s.state==='done'?'✓ Reorganized '+s.moved+' files':'Stopped';
+        toast(s.state==='done'?('Done — moved '+s.moved+' files. Undo is ready.'):'Stopped.');
+      }
+    }catch(e){ clearInterval(apPoll); }
+  }, 1000);
+}
+async function pauseJob(){
+  const b=$('#pauseBtn');
+  if(b.textContent==='Pause'){ await jfetch('/api/organize/pause',{method:'POST'},15000); b.textContent='Resume'; }
+  else{ await jfetch('/api/organize/resume',{method:'POST'},15000); b.textContent='Pause'; }
+}
+async function cancelJob(){ await jfetch('/api/organize/cancel',{method:'POST'},15000); }
 async function doUndo(){
-  const r=await (await fetch('/api/organize/undo',{method:'POST'})).json();
-  toast('Restored '+r.restored+' files to their original locations.');
+  try{ const r=await jfetch('/api/organize/undo',{method:'POST'},120000);
+    toast('Restored '+r.restored+' files to their original locations.');
+  }catch(e){ toast('undo failed: '+e.message); }
 }
 </script>
 </body>

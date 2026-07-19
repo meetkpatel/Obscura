@@ -1,14 +1,16 @@
 """Phase 3 — ORGANIZE.
 
-inventory -> understand (Gemma, cached) -> propose names/tree -> apply
-(crash-safe intent journal) -> UNDO.
+Browse -> inventory (with duplicate detection) -> understand (Gemma, first page)
+-> propose a healthcare-optimized taxonomy + naming -> apply (crash-safe journal)
+-> UNDO.
 
 Safety design:
   * Nothing moves until the user clicks Apply.
-  * Every op writes a journal entry (fsync'd) BEFORE the move, flips to
-    committed AFTER. On restart, incomplete ops are reconciled.
-  * Same-volume os.replace only (atomic). Cross-volume = out of MVP scope.
-  * UNDO replays the journal in reverse.
+  * NEVER deletes. Duplicates are MOVED to a _Duplicates_ForReview folder, so a
+    mistake is undoable.
+  * Every op writes a journal entry (fsync'd) BEFORE the move, flips to committed
+    AFTER. On restart, incomplete ops are reconciled. UNDO replays in reverse.
+  * Same-volume os.replace only (atomic).
 """
 from __future__ import annotations
 
@@ -17,28 +19,133 @@ import io
 import json
 import os
 import re
+import string
+import sys
 import time
 from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from contracts import FileProposal, OrganizePlan, JournalEntry
+from contracts import (FileProposal, OrganizePlan, DuplicateGroup, DirEntry,
+                       DirListing)
 import gemma
+import throttle
 
+IS_WIN = sys.platform.startswith("win")
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "AppData",
-             "$RECYCLE.BIN", "System Volume Information"}
-TEXT_EXTS = {".pdf", ".docx", ".txt", ".md", ".rtf"}
-SHEET_EXTS = {".xlsx", ".csv"}
-IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+             "$RECYCLE.BIN", "System Volume Information", "Windows",
+             "Program Files", "Program Files (x86)", "ProgramData", ".cache",
+             "_Organized", "_Duplicates_ForReview"}
+IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma"}
+# Doc types that carry protected health info (redaction candidates)
+PHI_DOCTYPES = {"visit-note", "progress-note", "lab-result", "imaging-report",
+                "pathology-report", "discharge-summary", "consult-note",
+                "referral", "prescription", "medication-list", "eob", "claim"}
 
 
 # ---------------------------------------------------------------------------
-# 1. Inventory
+# 0. Directory browsing (in-app file explorer — no fragile native dialog)
+# ---------------------------------------------------------------------------
+
+def list_drives() -> list[str]:
+    if not IS_WIN:
+        return ["/"]
+    drives = []
+    try:
+        from ctypes import windll
+        bits = windll.kernel32.GetLogicalDrives()
+        for i, letter in enumerate(string.ascii_uppercase):
+            if bits & (1 << i):
+                drives.append(f"{letter}:\\")
+    except Exception:
+        drives = ["C:\\"]
+    return drives
+
+
+def _shortcuts() -> list[DirEntry]:
+    home = Path.home()
+    out = []
+    for name, p in [("Desktop", home / "Desktop"), ("Documents", home / "Documents"),
+                    ("Downloads", home / "Downloads"), ("Home", home)]:
+        if p.exists():
+            out.append(DirEntry(name=name, path=str(p)))
+    return out
+
+
+def browse(path: str | None) -> DirListing:
+    """List subfolders (+ file count) of a path so the UI can navigate. If no
+    path, return drives + shortcuts (the 'This PC' view)."""
+    if not path:
+        return DirListing(path="", drives=list_drives(), shortcuts=_shortcuts())
+    p = Path(path)
+    if not p.exists() or not p.is_dir():
+        return DirListing(path=path, parent=None, drives=list_drives(),
+                          shortcuts=_shortcuts())
+    dirs, fcount = [], 0
+    try:
+        for entry in os.scandir(p):
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name in SKIP_DIRS or entry.name.startswith("."):
+                        continue
+                    dirs.append(DirEntry(name=entry.name, path=entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    fcount += 1
+            except OSError:
+                continue
+    except PermissionError:
+        pass
+    dirs.sort(key=lambda d: d.name.lower())
+    parent = str(p.parent) if p.parent != p else None
+    return DirListing(path=str(p), parent=parent, dirs=dirs, file_count=fcount,
+                      drives=list_drives(), shortcuts=_shortcuts())
+
+
+# ---------------------------------------------------------------------------
+# 0b. Taxonomy map — understand the EXISTING structure first (fast, free)
+# ---------------------------------------------------------------------------
+
+def map_taxonomy(root: str, max_dirs=400) -> dict:
+    """Deterministic scan of the existing folder tree: per top-level area, count
+    files and the dominant extensions. Free (no model). This is step 1 — know the
+    lay of the land before proposing changes."""
+    rootp = Path(root)
+    areas: dict[str, dict] = {}
+    total_files, total_dirs, dirs_seen = 0, 0, 0
+    for dirpath, dirnames, filenames in os.walk(rootp):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        dirs_seen += 1
+        if dirs_seen > max_dirs:
+            break
+        rel = Path(dirpath).relative_to(rootp)
+        area = rel.parts[0] if rel.parts else "(root)"
+        a = areas.setdefault(area, {"files": 0, "exts": {}})
+        for fn in filenames:
+            if fn.startswith("."):
+                continue
+            total_files += 1
+            a["files"] += 1
+            ext = Path(fn).suffix.lower() or "(none)"
+            a["exts"][ext] = a["exts"].get(ext, 0) + 1
+        total_dirs += len(dirnames)
+    # top exts per area
+    out_areas = []
+    for name, a in sorted(areas.items(), key=lambda kv: -kv[1]["files"]):
+        top = sorted(a["exts"].items(), key=lambda kv: -kv[1])[:5]
+        out_areas.append({"area": name, "files": a["files"],
+                          "top_types": [f"{e} ({c})" for e, c in top]})
+    return {"root": str(rootp), "total_files": total_files,
+            "total_areas": len(areas), "areas": out_areas[:40],
+            "truncated": dirs_seen > max_dirs}
+
+
+# ---------------------------------------------------------------------------
+# 1. Inventory + duplicate detection
 # ---------------------------------------------------------------------------
 
 def quick_hash(fp: Path) -> str:
-    """size + first/last 64KB — cheap near-unique id without full read."""
     try:
         size = fp.stat().st_size
         h = hashlib.sha1(str(size).encode())
@@ -52,10 +159,21 @@ def quick_hash(fp: Path) -> str:
         return ""
 
 
+def full_sha(fp: Path) -> str:
+    try:
+        h = hashlib.sha256()
+        with open(fp, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
 def inventory(root: str, limit=500) -> list[Path]:
     files = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
         for fn in filenames:
             if fn.startswith("."):
                 continue
@@ -65,34 +183,67 @@ def inventory(root: str, limit=500) -> list[Path]:
     return files
 
 
+def find_duplicates(files: list[Path]) -> tuple[list[DuplicateGroup], set[str]]:
+    """Exact-duplicate detection: group by size, then full SHA-256 on same-size
+    groups (so we only hash real candidates). Returns (groups, set-of-dup-paths).
+    Keeps the file with the shortest path / earliest mtime as the original."""
+    by_size: dict[int, list[Path]] = {}
+    for fp in files:
+        try:
+            by_size.setdefault(fp.stat().st_size, []).append(fp)
+        except OSError:
+            continue
+    groups, dup_paths = [], set()
+    for size, group in by_size.items():
+        if len(group) < 2 or size == 0:
+            continue
+        by_hash: dict[str, list[Path]] = {}
+        for fp in group:
+            s = full_sha(fp)
+            if s:
+                by_hash.setdefault(s, []).append(fp)
+        for sha, fps in by_hash.items():
+            if len(fps) < 2:
+                continue
+            fps.sort(key=lambda p: (len(str(p)), str(p)))  # keep shortest path
+            keep = fps[0]
+            dups = fps[1:]
+            for d in dups:
+                dup_paths.add(str(d))
+            groups.append(DuplicateGroup(sha=sha[:16], size=size, keep=str(keep),
+                                         duplicates=[str(d) for d in dups]))
+    return groups, dup_paths
+
+
 # ---------------------------------------------------------------------------
-# 2. Cheap signature -> Gemma classification (cached by quick-hash)
+# 2. Understand — first page -> Gemma classification (cached)
 # ---------------------------------------------------------------------------
 
 def signature(fp: Path) -> tuple[str, list[bytes]]:
-    """Return (text_snippet, [image_bytes]) — the minimum for the model to
-    classify without loading the whole file."""
     ext = fp.suffix.lower()
     try:
         if ext == ".pdf":
             doc = fitz.open(fp)
-            txt = doc[0].get_text()[:1500] if len(doc) else ""
+            txt = doc[0].get_text()[:1800] if len(doc) else ""
             imgs = []
-            if len(txt.strip()) < 40 and len(doc):  # scanned -> give the model a picture
+            if len(txt.strip()) < 40 and len(doc):  # scanned -> vision
                 pix = doc[0].get_pixmap(dpi=110)
                 imgs = [pix.tobytes("png")]
             doc.close()
             return f"[PDF] {fp.name}\n{txt}", imgs
-        if ext in {".txt", ".md", ".csv"}:
-            return f"[{ext}] {fp.name}\n" + fp.read_text(encoding="utf-8", errors="ignore")[:1500], []
+        if ext in {".txt", ".md", ".csv", ".rtf"}:
+            return f"[{ext}] {fp.name}\n" + fp.read_text(encoding="utf-8", errors="ignore")[:1800], []
         if ext == ".docx":
-            return f"[DOCX] {fp.name}\n" + _docx_text(fp)[:1500], []
+            return f"[DOCX] {fp.name}\n" + _docx_text(fp)[:1800], []
         if ext in IMG_EXTS:
             from PIL import Image
-            im = Image.open(fp).convert("RGB")
-            im.thumbnail((640, 640))
+            im = Image.open(fp).convert("RGB"); im.thumbnail((720, 720))
             buf = io.BytesIO(); im.save(buf, "PNG")
             return f"[IMAGE] {fp.name}", [buf.getvalue()]
+        if ext in AUDIO_EXTS:
+            # Gemma 4 is natively audio-capable; here we route by name and flag it
+            # for transcription (Obscura's transcription path) — clinics dictate.
+            return f"[AUDIO recording / dictation] {fp.name}", []
     except Exception:
         pass
     return f"[{ext}] {fp.name}", []
@@ -100,7 +251,7 @@ def signature(fp: Path) -> tuple[str, list[bytes]]:
 
 def _docx_text(fp: Path) -> str:
     try:
-        import zipfile, xml.etree.ElementTree as ET
+        import zipfile
         with zipfile.ZipFile(fp) as z:
             xml = z.read("word/document.xml").decode("utf-8", "ignore")
         return re.sub(r"<[^>]+>", " ", xml)
@@ -108,30 +259,61 @@ def _docx_text(fp: Path) -> str:
         return ""
 
 
-CLASSIFY_PROMPT = (
-    "You are a file-organization assistant. Given a file's name and a snippet of "
-    "its content, classify it. Return ONLY JSON:\n"
-    '{"doc_type":"invoice|contract|report|resume|receipt|letter|photo|statement|'
-    'presentation|spreadsheet|note|other","category":"Finance|Legal|Work|Personal|'
-    'Medical|Media|Other","topic":"2-4 word subject","entity":"company or person '
-    'or empty","doc_date":"YYYY-MM-DD or empty","descriptor":"short-kebab-name",'
+# Healthcare document taxonomy -> (category, subcategory)
+HC_DOCTYPES = {
+    "visit-note": ("Clinical", "Visit Notes"),
+    "progress-note": ("Clinical", "Visit Notes"),
+    "lab-result": ("Clinical", "Lab Results"),
+    "imaging-report": ("Clinical", "Imaging & Radiology"),
+    "pathology-report": ("Clinical", "Lab Results"),
+    "medication-list": ("Clinical", "Medications"),
+    "prescription": ("Clinical", "Medications"),
+    "referral": ("Clinical", "Referrals & Consults"),
+    "consult-note": ("Clinical", "Referrals & Consults"),
+    "discharge-summary": ("Clinical", "Discharge & Summaries"),
+    "immunization": ("Clinical", "Immunizations"),
+    "insurance-card": ("Administrative", "Insurance"),
+    "eob": ("Administrative", "Insurance"),
+    "billing-statement": ("Administrative", "Billing & Claims"),
+    "claim": ("Administrative", "Billing & Claims"),
+    "consent-form": ("Administrative", "Consents & Forms"),
+    "intake-form": ("Administrative", "Consents & Forms"),
+    "correspondence": ("Administrative", "Correspondence"),
+    "other": ("Administrative", "Other"),
+}
+
+HC_PROMPT = (
+    "You are a medical records organizer. From the file name and its first-page "
+    "text, classify the document for a clinic's filing system. Return ONLY JSON:\n"
+    '{"doc_type":"visit-note|progress-note|lab-result|imaging-report|pathology-report|'
+    'medication-list|prescription|referral|consult-note|discharge-summary|immunization|'
+    'insurance-card|eob|billing-statement|claim|consent-form|intake-form|correspondence|'
+    'other","patient":"Last-First or empty if none","provider":"name or empty",'
+    '"doc_date":"YYYY-MM-DD or empty","descriptor":"3-5 word kebab summary",'
     '"confidence":0.0}'
 )
 
+GEN_PROMPT = (
+    "You are a file-organization assistant. From the file name and a content "
+    "snippet, classify it. Return ONLY JSON:\n"
+    '{"doc_type":"invoice|contract|report|resume|receipt|letter|photo|statement|'
+    'presentation|spreadsheet|note|other","category":"Finance|Legal|Work|Personal|'
+    'Medical|Media|Other","patient":"","doc_date":"YYYY-MM-DD or empty",'
+    '"descriptor":"short-kebab-name","confidence":0.0}'
+)
 
-def classify(fp: Path, model: str, cache: dict) -> dict:
+
+def classify(fp: Path, model: str, cache: dict, profile: str) -> dict:
     qh = quick_hash(fp)
     if qh and qh in cache:
         return cache[qh]
     snip, imgs = signature(fp)
-    prompt = CLASSIFY_PROMPT + f"\n\nFILE:\n{snip}"
+    prompt = (HC_PROMPT if profile == "healthcare" else GEN_PROMPT) + f"\n\nFILE:\n{snip}"
     try:
         data = gemma.generate_json(prompt, model=model, images=imgs or None,
                                    num_predict=300, timeout=180)
     except gemma.GemmaError:
-        data = {"doc_type": "other", "category": "Other", "topic": "",
-                "entity": "", "doc_date": "", "descriptor": fp.stem[:30],
-                "confidence": 0.0}
+        data = {"doc_type": "other", "descriptor": fp.stem[:30], "confidence": 0.0}
     data["_qh"] = qh
     if qh:
         cache[qh] = data
@@ -139,52 +321,167 @@ def classify(fp: Path, model: str, cache: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 3. Propose — code-enforced naming template (Gemma supplies descriptor only)
+# 3. Propose — healthcare-optimized folders + searchable naming
 # ---------------------------------------------------------------------------
 
 def sanitize(s: str, maxlen=40) -> str:
-    s = re.sub(r"[^\w\s-]", "", s).strip().lower()
+    s = re.sub(r"[^\w\s-]", "", (s or "")).strip()
     s = re.sub(r"[\s_]+", "-", s)
-    return s[:maxlen].strip("-") or "untitled"
+    return s[:maxlen].strip("-")
 
 
-def build_plan(root: str, model: str, limit=200) -> OrganizePlan:
+def _clean_date(date: str) -> str:
+    """Extract just a YYYY-MM-DD from a possibly-messy model date field."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", date or "")
+    return m.group(1) if m else ""
+
+
+def normalize_patient(s: str) -> str:
+    """Order-stable canonical patient key. The model returns names in varying
+    order ('Kim-John' vs 'John-Kim' vs 'Kim, John') — we title-case the name
+    tokens and SORT them, so the same patient always yields the same string and
+    files into the same place. Consistency (one folder per patient) beats
+    guessing which token is the surname."""
+    toks = [t.capitalize() for t in re.split(r"[^A-Za-z]+", s or "") if t]
+    # drop obvious non-name filler the model sometimes emits
+    toks = [t for t in toks if t.lower() not in ("empty", "none", "unknown", "patient", "na")]
+    return "-".join(sorted(toks))[:40]
+
+
+def _confidence(meta: dict, profile: str) -> float:
+    """Deterministic confidence from what was actually extracted — far more
+    reliable than the model's self-reported score (E4B usually returns 0).
+    Rewards a recognized doc type + a found patient + a found date."""
+    dtype = (meta.get("doc_type") or "other").lower()
+    known = dtype in HC_DOCTYPES if profile == "healthcare" else dtype not in ("", "other")
+    c = 0.35
+    if known and dtype != "other":
+        c += 0.30
+    if normalize_patient(meta.get("patient")):
+        c += 0.20
+    if _clean_date(meta.get("doc_date")):
+        c += 0.15
+    return round(min(c, 0.99), 2)
+
+
+def _place(meta: dict, profile: str) -> tuple[str, str, str]:
+    """Return (category, subcategory, new_name) from classified metadata.
+    Every component is sanitized so filenames are always clean + searchable."""
+    dtype = sanitize((meta.get("doc_type") or "other").lower(), 20) or "other"
+    date = _clean_date(meta.get("doc_date"))
+    desc = sanitize(meta.get("descriptor"), 40) or "document"
+    if profile == "healthcare":
+        cat, sub = HC_DOCTYPES.get((meta.get("doc_type") or "other").lower(),
+                                   ("Administrative", "Other"))
+        patient = normalize_patient(meta.get("patient"))   # order-stable per patient
+        parts = [p for p in [date, patient, dtype, desc] if p]   # DATE_Patient_Type_desc
+        return cat, sub, "_".join(parts)
+    cat = meta.get("category", "Other") or "Other"
+    parts = [p for p in [date, dtype, desc] if p]
+    return cat, "", "_".join(parts)
+
+
+def build_plan(root: str, model: str, profile="healthcare", limit=200,
+               layout="by-type", gate: "throttle.Gate | None" = None,
+               progress=None) -> OrganizePlan:
     files = inventory(root, limit)
+    dup_groups, dup_paths = find_duplicates(files)
     cache: dict = {}
     proposals: list[FileProposal] = []
     used: set[str] = set()
     tree: dict = {}
+    total = len(files)
+    done = 0
+    if progress:
+        progress(0, total)
+    # Classify one file at a time. (Measured: batching multiple files into one
+    # Gemma call is SLOWER on this hardware — the larger combined response costs
+    # more than the per-call overhead it saves — so per-file wins. The real speed
+    # levers are E4B-as-default, the hash cache, and skipping duplicates.)
     for fp in files:
-        meta = classify(fp, model, cache)
-        cat = meta.get("category", "Other") or "Other"
-        date = meta.get("doc_date", "") or ""
-        dtype = meta.get("doc_type", "other") or "other"
-        desc = sanitize(meta.get("descriptor") or fp.stem)
-        prefix = (date + "_") if re.match(r"\d{4}-\d{2}-\d{2}", date) else ""
-        new_name = f"{prefix}{sanitize(dtype,16)}_{desc}{fp.suffix.lower()}"
-        # de-dupe within the target category
-        base, i = new_name, 1
-        while (cat + "/" + new_name) in used:
-            stem = base.rsplit(".", 1)[0]
-            new_name = f"{stem}-{i}{fp.suffix.lower()}"
-            i += 1
-        used.add(cat + "/" + new_name)
-        dst = str(Path(root) / "_Organized" / cat / new_name)
-        tree.setdefault(cat, 0)
-        tree[cat] += 1
+        if gate and not gate.wait():   # stay polite during a big scan
+            break
+        is_dup = str(fp) in dup_paths
+        meta = classify(fp, model, cache, profile) if not is_dup \
+            else {"doc_type": "duplicate", "confidence": 1.0}
+        done += 1
+        if progress:
+            progress(done, total)
+        if is_dup:
+            dst = str(Path(root) / "_Duplicates_ForReview" / fp.name)
+            proposals.append(FileProposal(
+                src=str(fp), dst=dst, old_name=fp.name, new_name=fp.name,
+                category="_Duplicates_ForReview", doc_type="duplicate",
+                reason="Exact copy of another file (same SHA-256). Quarantined, not deleted.",
+                confidence=1.0, quick_hash=quick_hash(fp), is_duplicate=True))
+            continue
+        cat, sub, base_name = _place(meta, profile)
+        patient_norm = normalize_patient(meta.get("patient"))
+        # folder parts depend on the chosen layout
+        if layout == "by-patient" and profile == "healthcare":
+            pfolder = patient_norm or "Unassigned"
+            parts = ["Patients", pfolder] + ([sub or cat] if (sub or cat) else [])
+        else:  # by-type
+            parts = [cat] + ([sub] if sub else [])
+        folder = "/".join(parts)
+        new_name = base_name + fp.suffix.lower()
+        key = folder + "/" + new_name.lower()
+        n = 1
+        while key in used:
+            new_name = base_name + f"-{n}" + fp.suffix.lower()
+            key = folder + "/" + new_name.lower()
+            n += 1
+        used.add(key)
+        dst = str(Path(root) / "_Organized" / Path(*parts) / new_name)
+        tree.setdefault(folder, 0)
+        tree[folder] += 1
+        reason_bits = [meta.get("doc_type", ""), patient_norm, _clean_date(meta.get("doc_date"))]
+        dtype_l = (meta.get("doc_type") or "").lower()
+        is_audio = fp.suffix.lower() in AUDIO_EXTS
+        # PHI candidate: a clinical doc type or a file tied to a named patient
+        sensitive = profile == "healthcare" and (dtype_l in PHI_DOCTYPES or bool(patient_norm))
         proposals.append(FileProposal(
             src=str(fp), dst=dst, old_name=fp.name, new_name=new_name,
-            category=cat, doc_type=dtype, topic=meta.get("topic", ""),
-            reason=f"{dtype} · {meta.get('topic','')}".strip(" ·"),
-            confidence=float(meta.get("confidence", 0.5) or 0.5),
-            quick_hash=meta.get("_qh", ""),
-        ))
-    proposals.sort(key=lambda p: p.confidence)  # low-confidence first for review
-    return OrganizePlan(root=root, proposals=proposals, tree_preview=tree)
+            category=cat, subcategory=sub, doc_type=meta.get("doc_type", ""),
+            patient=patient_norm, topic=meta.get("descriptor", ""),
+            reason=" · ".join([b for b in reason_bits if b]) or "classified from first page",
+            confidence=_confidence(meta, profile),
+            quick_hash=meta.get("_qh", ""), is_duplicate=False,
+            sensitive=sensitive, transcribable=is_audio))
+    proposals.sort(key=lambda p: (p.is_duplicate, p.confidence))
+    conv = ("YYYY-MM-DD_Patient_DocType_description.ext — sorts by date, groups by "
+            "patient, and is self-describing so search finds it fast."
+            if profile == "healthcare"
+            else "YYYY-MM-DD_type_description.ext")
+    reason = (_taxonomy_reason(tree, profile, len(dup_groups), layout))
+    return OrganizePlan(root=root, profile=profile, proposals=proposals,
+                        tree_preview=tree, duplicates=dup_groups,
+                        naming_convention=conv, taxonomy_reason=reason,
+                        scanned=len(files), capped=len(files) >= limit, cap=limit)
+
+
+def _taxonomy_reason(tree: dict, profile: str, n_dupes: int, layout="by-type") -> str:
+    if profile == "healthcare" and layout == "by-patient":
+        base = ("Grouped by PATIENT first, then by record type — the chart-per-"
+                "patient view a clinic pulls a whole record from. Under each patient: "
+                "Visit Notes, Labs, Imaging, Insurance, Billing. File names still lead "
+                "with the date so each patient's record reads chronologically.")
+    elif profile == "healthcare":
+        base = ("Clinical vs. Administrative at the top level mirrors how a chart "
+                "is used at the point of care: clinicians reach for Visit Notes, "
+                "Labs, Imaging, Medications; front-office staff reach for Insurance, "
+                "Billing, Consents. Every file name starts with the date and patient "
+                "so chronological browsing and name search both work.")
+    else:
+        base = ("Grouped by document category so related files live together; "
+                "names start with the date for chronological browsing.")
+    if n_dupes:
+        base += f" Found {n_dupes} set(s) of exact duplicates — quarantined for review, never deleted."
+    return base
 
 
 # ---------------------------------------------------------------------------
-# 4. Apply — crash-safe intent journal
+# 4. Apply — crash-safe intent journal (moves only; never deletes)
 # ---------------------------------------------------------------------------
 
 def _fsync_write(path: Path, obj) -> None:
@@ -194,51 +491,177 @@ def _fsync_write(path: Path, obj) -> None:
         os.fsync(f.fileno())
 
 
+def _safe_move(src: Path, dst: Path) -> None:
+    """Move src -> dst, handling cross-volume safely. Same drive: atomic
+    os.replace. Different drive (os.replace raises): copy to a temp name,
+    VERIFY the copy (size + full SHA-256), then remove the source — so a failure
+    mid-copy never destroys the original (the source is deleted only after the
+    destination is proven identical)."""
+    if src.drive.lower() == dst.drive.lower():
+        os.replace(src, dst)
+        return
+    import shutil
+    tmp = dst.with_name(dst.name + ".obscura-partial")
+    shutil.copy2(src, tmp)                       # copy to a partial name first
+    if tmp.stat().st_size != src.stat().st_size or full_sha(tmp) != full_sha(src):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise OSError("cross-volume copy verification failed — source kept intact")
+    os.replace(tmp, dst)                          # atomic rename within dst volume
+    os.remove(src)                                # only now remove the original
+
+
+def _move_one(p: FileProposal, entries: list, journal_path: str) -> tuple[bool, dict | None]:
+    """Move a single proposal, journaled. Returns (moved, skip_info)."""
+    src, dst = Path(p.src), Path(p.dst)
+    if not src.exists():
+        return False, {"src": p.src, "why": "source gone"}
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        k = 1
+        while dst.with_stem(f"{dst.stem}-{k}").exists():
+            k += 1
+        dst = dst.with_stem(f"{dst.stem}-{k}")
+    entry = {"op": "move", "src": str(src), "dst": str(dst),
+             "hash": p.quick_hash, "ts": _now(), "committed": False}
+    entries.append(entry)
+    _fsync_write(Path(journal_path), entries)      # intent BEFORE the move
+    try:
+        _safe_move(src, dst)
+        entry["committed"] = True
+        _fsync_write(Path(journal_path), entries)
+        return True, None
+    except PermissionError:
+        entries.pop(); _fsync_write(Path(journal_path), entries)
+        return False, {"src": p.src, "why": "file locked/open"}
+    except Exception as e:
+        entries.pop(); _fsync_write(Path(journal_path), entries)
+        return False, {"src": p.src, "why": str(e)}
+
+
 def apply_plan(plan: OrganizePlan, journal_path: str) -> dict:
-    entries = []
-    moved = 0
-    skipped = []
+    """Synchronous apply (small folders / 'now' mode)."""
+    entries, moved, skipped = [], 0, []
     for p in plan.proposals:
         if p.excluded:
             continue
-        src, dst = Path(p.src), Path(p.dst)
-        if not src.exists():
-            skipped.append({"src": p.src, "why": "source gone"})
-            continue
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        # collision suffix
-        if dst.exists():
-            k = 1
-            while dst.with_stem(f"{dst.stem}-{k}").exists():
-                k += 1
-            dst = dst.with_stem(f"{dst.stem}-{k}")
-        # same-volume only (MVP)
-        if src.drive.lower() != dst.drive.lower():
-            skipped.append({"src": p.src, "why": "cross-volume (out of MVP scope)"})
-            continue
-        entry = {"op": "move", "src": str(src), "dst": str(dst),
-                 "hash": p.quick_hash, "ts": _now(), "committed": False}
-        entries.append(entry)
-        _fsync_write(Path(journal_path), entries)   # intent BEFORE the move
-        try:
-            os.replace(src, dst)                     # atomic on same volume
-            entry["committed"] = True
-            _fsync_write(Path(journal_path), entries)
+        ok, skip = _move_one(p, entries, journal_path)
+        if ok:
             moved += 1
-        except PermissionError:
-            skipped.append({"src": p.src, "why": "file locked/open"})
-            entries.pop()
-            _fsync_write(Path(journal_path), entries)
-        except Exception as e:
-            skipped.append({"src": p.src, "why": str(e)})
-            entries.pop()
-            _fsync_write(Path(journal_path), entries)
+        elif skip:
+            skipped.append(skip)
     return {"moved": moved, "skipped": skipped, "journal": journal_path,
             "map": [{"from": e["src"], "to": e["dst"]} for e in entries if e["committed"]]}
 
 
+import threading
+
+# --- Background SCAN job (so the plan build shows live progress) ---------------
+_SCAN: dict = {"thread": None, "done": 0, "total": 0, "state": "idle",
+               "plan_obj": None, "error": None}
+
+
+def start_plan(root: str, model: str, profile: str, limit: int, mode: str = "eco",
+               layout: str = "by-type") -> dict:
+    if _SCAN["thread"] and _SCAN["thread"].is_alive():
+        return {"error": "a scan is already running"}
+    _SCAN.update(done=0, total=0, state="running", plan_obj=None, error=None)
+
+    def work():
+        try:
+            gate = throttle.Gate(mode)
+            def prog(d, t):
+                _SCAN["done"], _SCAN["total"] = d, t
+            plan = build_plan(root, model, profile=profile, limit=limit,
+                              layout=layout, gate=gate, progress=prog)
+            _SCAN["plan_obj"] = plan
+            _SCAN["state"] = "done"
+        except Exception as e:            # never leave the UI hanging
+            _SCAN["error"] = str(e)
+            _SCAN["state"] = "error"
+
+    t = threading.Thread(target=work, daemon=True)
+    _SCAN["thread"] = t
+    t.start()
+    return {"started": True}
+
+
+def plan_status() -> dict:
+    st = {"state": _SCAN["state"], "done": _SCAN["done"], "total": _SCAN["total"],
+          "error": _SCAN["error"]}
+    if _SCAN["state"] == "done" and _SCAN["plan_obj"] is not None:
+        st["plan"] = _SCAN["plan_obj"].model_dump()
+    return st
+
+
+# --- Background, throttled, idle-aware apply job -------------------------------
+
+_JOB: dict = {"thread": None, "gate": None, "total": 0, "done": 0, "moved": 0,
+              "skipped": [], "state": "idle", "journal": ""}
+
+
+def _apply_worker(plan: OrganizePlan, journal_path: str, mode: str):
+    gate = throttle.Gate(mode)
+    _JOB.update(gate=gate, total=len([p for p in plan.proposals if not p.excluded]),
+                done=0, moved=0, skipped=[], state="running", journal=journal_path)
+    throttle.set_low_priority()
+    entries = []
+    try:
+        for p in plan.proposals:
+            if p.excluded:
+                continue
+            if not gate.wait():          # cancelled
+                _JOB["state"] = "cancelled"
+                break
+            ok, skip = _move_one(p, entries, journal_path)
+            _JOB["done"] += 1
+            if ok:
+                _JOB["moved"] += 1
+            elif skip:
+                _JOB["skipped"].append(skip)
+        else:
+            _JOB["state"] = "done"
+    finally:
+        throttle.restore_priority()
+        if _JOB["state"] not in ("cancelled", "done"):
+            _JOB["state"] = "done"
+
+
+def start_apply(plan: OrganizePlan, journal_path: str, mode="eco") -> dict:
+    if _JOB["thread"] and _JOB["thread"].is_alive():
+        return {"error": "a reorg is already running"}
+    t = threading.Thread(target=_apply_worker, args=(plan, journal_path, mode), daemon=True)
+    _JOB["thread"] = t
+    t.start()
+    return {"started": True, "mode": mode,
+            "total": len([p for p in plan.proposals if not p.excluded])}
+
+
+def apply_job_status() -> dict:
+    g = _JOB.get("gate")
+    snap = g.snapshot() if g else {}
+    return {"state": _JOB["state"], "done": _JOB["done"], "total": _JOB["total"],
+            "moved": _JOB["moved"], "skipped": len(_JOB["skipped"]), "gate": snap}
+
+
+def pause_job():
+    if _JOB.get("gate"): _JOB["gate"].paused = True
+    return apply_job_status()
+
+
+def resume_job():
+    if _JOB.get("gate"): _JOB["gate"].paused = False
+    return apply_job_status()
+
+
+def cancel_job():
+    if _JOB.get("gate"): _JOB["gate"].cancelled = True
+    return apply_job_status()
+
+
 def undo(journal_path: str) -> dict:
-    """Replay committed moves in reverse."""
     p = Path(journal_path)
     if not p.exists():
         return {"restored": 0, "error": "no journal"}
@@ -247,11 +670,11 @@ def undo(journal_path: str) -> dict:
     for e in reversed(entries):
         if not e.get("committed"):
             continue
-        src, dst = Path(e["dst"]), Path(e["src"])   # reverse
+        src, dst = Path(e["dst"]), Path(e["src"])
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             if src.exists():
-                os.replace(src, dst)
+                _safe_move(src, dst)      # reverse the move (cross-volume safe)
                 restored += 1
         except Exception as ex:
             failed.append({"file": str(src), "why": str(ex)})
@@ -259,7 +682,6 @@ def undo(journal_path: str) -> dict:
 
 
 def reconcile(journal_path: str) -> dict:
-    """On startup: roll back any move that was journaled but not committed."""
     p = Path(journal_path)
     if not p.exists():
         return {"rolled_back": 0}
@@ -272,10 +694,9 @@ def reconcile(journal_path: str) -> dict:
         if e.get("committed"):
             continue
         src, dst = Path(e["src"]), Path(e["dst"])
-        if dst.exists() and not src.exists():   # move happened, flag didn't flip
+        if dst.exists() and not src.exists():
             try:
-                os.replace(dst, src)
-                rb += 1
+                _safe_move(dst, src); rb += 1
             except Exception:
                 pass
     return {"rolled_back": rb}

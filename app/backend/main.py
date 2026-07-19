@@ -8,13 +8,15 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 import psutil
-from fastapi import FastAPI, UploadFile, File, Body
+from fastapi import FastAPI, Request, UploadFile, File, Body
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+import companion
 import gemma
 import hardware
 import phase1_redact as p1
@@ -23,6 +25,18 @@ import phase3_organize as p3
 from contracts import Connection, EgressReport, OrganizePlan
 
 app = FastAPI(title="Obscura", docs_url=None, redoc_url=None)
+
+SERVER_PORT = int(os.environ.get("OBSCURA_PORT", "8000"))
+
+
+@app.middleware("http")
+async def companion_guard(request: Request, call_next):
+    """Pairing gate. Loopback (the desktop) always passes; any other address
+    must present the per-run companion token or gets 403 before any route."""
+    denied = companion.check(request)
+    if denied is not None:
+        return denied
+    return await call_next(request)
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 WORK = Path(tempfile.gettempdir()) / "obscura_work"
@@ -85,6 +99,8 @@ def egress() -> EgressReport:
     conns: list[Connection] = []
     external = 0
     me = psutil.Process()
+    procs = []
+    listen_ports: set[int] = set()
     for p in [me] + me.children(recursive=True):
         try:
             # psutil >=6 renamed Process.connections() -> net_connections()
@@ -93,13 +109,27 @@ def egress() -> EgressReport:
             pname = p.name()
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
             continue
+        procs.append((p, pname, pconns))
+        # ports WE listen on — a connection whose local port is one of these is
+        # an INBOUND client (the paired phone), not egress from this app
+        for c in pconns:
+            if not c.raddr and c.laddr and str(getattr(c, "status", "")) == "LISTEN":
+                listen_ports.add(c.laddr.port)
+    for p, pname, pconns in procs:
         for c in pconns:
             if not c.raddr:
                 continue
             ip = c.raddr.ip
             loop = ip.startswith("127.") or ip == "::1"
-            label = "local LLM — allowed" if (loop and c.raddr.port == 11434) \
-                else ("local" if loop else "EXTERNAL")
+            inbound = c.laddr and c.laddr.port in listen_ports
+            if loop and c.raddr.port == 11434:
+                label = "local LLM — allowed"
+            elif loop:
+                label = "local"
+            elif inbound:
+                label = "companion device — inbound, paired (not egress)"
+            else:
+                label = "EXTERNAL"
             if label == "EXTERNAL":
                 external += 1
             conns.append(Connection(
@@ -110,6 +140,115 @@ def egress() -> EgressReport:
         external_count=external, connections=conns,
         verdict="0 external connections — the document never left this machine."
         if external == 0 else f"{external} EXTERNAL connection(s) detected!")
+
+
+# --------------------------------------------------------------------------
+# Companion — phone dispatch + monitor (zero-cloud; see companion.py)
+# --------------------------------------------------------------------------
+
+@app.get("/api/companion/info")
+def companion_info(request: Request):
+    """Pairing QR + URL. LOOPBACK ONLY — the token is handed out on the desktop
+    screen, never over the network."""
+    if not companion.is_loopback(request.client.host if request.client else ""):
+        return JSONResponse({"error": "pairing info is desktop-only"}, status_code=403)
+    # the port the desktop reached us on IS the server port — no config needed
+    return companion.pairing_info(request.url.port or SERVER_PORT)
+
+
+@app.get("/api/events")
+def events(since: int = 0):
+    """Activity feed the phone polls. One-line state summaries, never content."""
+    return companion.events_since(since)
+
+
+@app.get("/api/status/summary")
+def status_summary():
+    """Everything the phone needs to show 'what is Obscura doing right now' in
+    one call — job states + counts only (no page images, no file contents)."""
+    detect = STATE.get("detect") or []
+    boxes = sum(len(r.boxes) for r in detect if r)
+    plan_st = p3.plan_status()
+    plan = STATE.get("plan")
+    return {
+        "redact": {
+            "pages": len(STATE.get("pages") or []),
+            "pages_detected": sum(1 for r in detect if r),
+            "boxes": boxes,
+            "redacted_count": STATE.get("redacted_count", 0),
+            "verify_passed": (STATE.get("verify") or {}).get("passed"),
+        },
+        "secure": {
+            "state": SECURE_JOB["state"],
+            "safety_score": (SECURE_JOB.get("result") or {}).get("safety_score"),
+            "performance_score": (SECURE_JOB.get("result") or {}).get("performance_score"),
+            "findings": len((SECURE_JOB.get("result") or {}).get("findings", [])),
+            "optimizations": len((SECURE_JOB.get("result") or {}).get("optimizations", [])),
+            "reclaimable_mb": (SECURE_JOB.get("result") or {}).get("reclaimable_mb", 0),
+            "error": SECURE_JOB.get("error"),
+        },
+        "organize": {
+            "plan_state": plan_st.get("state"),
+            "plan_done": plan_st.get("done"), "plan_total": plan_st.get("total"),
+            "plan_ready": plan is not None,
+            "plan_files": len(plan.proposals) if plan else 0,
+            "apply": p3.apply_job_status(),
+        },
+    }
+
+
+@app.get("/m", response_class=HTMLResponse)
+def mobile(request: Request):
+    """Companion page. Reaching here means the middleware already accepted the
+    token (or it's loopback); persist it as a cookie so later taps + downloads
+    work without the query string."""
+    html = (FRONTEND / "mobile.html").read_text(encoding="utf-8")
+    resp = HTMLResponse(html)
+    t = request.query_params.get("t")
+    if t:
+        resp.set_cookie(companion.COOKIE, t, max_age=12 * 3600, samesite="lax")
+    return resp
+
+
+# SECURE scan as a dispatchable background job (the phone can't sit on a
+# blocking request; the existing sync /api/secure/scan stays for the desktop).
+SECURE_JOB: dict = {"thread": None, "state": "idle", "result": None, "error": None}
+
+
+@app.post("/api/secure/scan_start")
+def secure_scan_start(body: dict = Body(default={})):
+    if SECURE_JOB["thread"] and SECURE_JOB["thread"].is_alive():
+        return JSONResponse({"error": "a scan is already running"}, status_code=200)
+    model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
+    roots, use_gemma, deep = body.get("roots"), body.get("use_gemma", True), body.get("deep", False)
+    SECURE_JOB.update(state="running", result=None, error=None)
+
+    def work():
+        try:
+            res = p2.run_scan(roots, model, use_gemma=use_gemma, deep=deep)
+            SECURE_JOB["result"] = res.model_dump()
+            SECURE_JOB["state"] = "done"
+            companion.log("secure", f"Scan finished — safety {res.safety_score}/100, "
+                          f"{len(res.findings)} finding(s), "
+                          f"{res.reclaimable_mb} MB reclaimable", "done")
+        except Exception as e:
+            SECURE_JOB["error"] = str(e)[:200]
+            SECURE_JOB["state"] = "error"
+            companion.log("secure", f"Scan failed: {str(e)[:120]}", "error")
+
+    t = threading.Thread(target=work, daemon=True)
+    SECURE_JOB["thread"] = t
+    t.start()
+    companion.log("secure", "Security + optimization scan dispatched", "start")
+    return {"started": True}
+
+
+@app.get("/api/secure/scan_status")
+def secure_scan_status():
+    out = {"state": SECURE_JOB["state"], "error": SECURE_JOB.get("error")}
+    if SECURE_JOB["state"] == "done":
+        out["result"] = SECURE_JOB["result"]
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -155,6 +294,7 @@ async def redact_load(file: UploadFile = File(...)):
             status_code=200)
     STATE["pages"] = pages
     STATE["detect"] = [None] * len(pages)
+    companion.log("redact", f"Document loaded — {len(pages)} page(s)", "start")
     return {"page_count": len(pages),
             "pages": [{"image": _img_data_url(pg), "width": pg.size[0], "height": pg.size[1]}
                       for pg in pages]}
@@ -170,6 +310,7 @@ def redact_detect_page(body: dict = Body(...)):
     model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
     res, skipped = _detect_one(i, model)
     STATE["detect"][i] = res
+    companion.log("redact", f"Page {i + 1} scanned — {len(res.boxes)} sensitive item(s)")
     return {"index": i, "boxes": [b.model_dump() for b in res.boxes],
             "stats": res.stats, "gemma_skipped": skipped,
             "note": ("This page used deterministic detection only (Gemma slow/unavailable)."
@@ -206,6 +347,8 @@ def redact_apply(body: dict = Body(...)):
     STATE["redacted_pdf"] = out_pdf
     STATE["verify"] = verify
     STATE["redacted_count"] = len(gone)
+    companion.log("redact", f"Redaction applied — {len(gone)} item(s) removed, "
+                  f"verification {'PASSED' if verify.get('passed') else 'FAILED'}", "done")
     import base64
     previews = []
     for r in redacted:
@@ -304,40 +447,136 @@ def secure_scan(body: dict = Body(default={})):
     roots = body.get("roots")
     quality = body.get("quality", False)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    res = p2.run_scan(roots, model, use_gemma=body.get("use_gemma", True))
+    res = p2.run_scan(roots, model, use_gemma=body.get("use_gemma", True),
+                      deep=body.get("deep", False))   # deep = slow WinSxS DISM analysis
     return res.model_dump()
+
+
+@app.post("/api/secure/optimize/evaluate")
+def optimize_evaluate(body: dict = Body(...)):
+    """Gemma reviews its own cleanup plan for reliability BEFORE running it —
+    the self-check step. Returns the deterministic plan + Gemma's review."""
+    import optimize_exec
+    ids = body.get("action_ids", [])
+    model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
+    return {"preview": optimize_exec.preview(ids),
+            "evaluation": optimize_exec.evaluate_plan(ids, model)}
+
+
+@app.post("/api/secure/optimize/run")
+def optimize_run(body: dict = Body(...)):
+    """Execute the consented SAFE cleanup actions, measuring actual disk freed
+    and self-verifying each. Only the hardcoded action registry can run."""
+    import optimize_exec
+    ids = body.get("action_ids", [])
+    if not ids:
+        return JSONResponse({"error": "no actions selected"}, status_code=400)
+    return optimize_exec.run_actions(ids)
 
 
 # --------------------------------------------------------------------------
 # Phase 3 — ORGANIZE
 # --------------------------------------------------------------------------
 
+def _resolve_scope(scope: str, path: str | None) -> str | None:
+    """scope: folder(uses path) | downloads | home."""
+    home = Path.home()
+    if scope == "downloads":
+        return str(home / "Downloads")
+    if scope in ("home", "computer"):
+        return str(home)
+    return path
+
+
+@app.post("/api/organize/browse")
+def organize_browse(body: dict = Body(default={})):
+    """In-app directory browser. body={path} or empty for the 'This PC' view."""
+    return p3.browse(body.get("path")).model_dump()
+
+
+@app.post("/api/organize/taxonomy")
+def organize_taxonomy(body: dict = Body(default={})):
+    """Step 1 — map the EXISTING folder/file structure (free, no model)."""
+    root = _resolve_scope(body.get("scope", "folder"), body.get("path"))
+    if not root or not os.path.isdir(root):
+        return JSONResponse({"error": f"not a folder: {root}"}, status_code=400)
+    return p3.map_taxonomy(root)
+
+
 @app.post("/api/organize/plan")
 def organize_plan(body: dict = Body(...)):
-    root = body.get("root")
+    """Start the plan build as a BACKGROUND job so the UI can show live
+    per-file progress. Poll /api/organize/plan_status for progress + result."""
+    root = _resolve_scope(body.get("scope", "folder"), body.get("root") or body.get("path"))
     quality = body.get("quality", False)
+    profile = body.get("profile", "healthcare")
     if not root or not os.path.isdir(root):
         return JSONResponse({"error": f"not a folder: {root}"}, status_code=400)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    plan = p3.build_plan(root, model, limit=body.get("limit", 200))
-    STATE["plan"] = plan
-    return plan.model_dump()
+    companion.log("organize", f"Plan build dispatched — {root}", "start")
+    return p3.start_plan(root, model, profile, body.get("limit", 200),
+                         body.get("run_mode", "eco"), body.get("layout", "by-type"))
+
+
+@app.get("/api/organize/plan_status")
+def organize_plan_status():
+    st = p3.plan_status()
+    if st.get("state") == "done" and p3._SCAN.get("plan_obj") is not None:
+        if STATE.get("plan") is not p3._SCAN["plan_obj"]:
+            n = len(p3._SCAN["plan_obj"].proposals)
+            companion.log("organize", f"Plan ready — {n} file(s) proposed; "
+                          f"awaiting review/approval", "done")
+        STATE["plan"] = p3._SCAN["plan_obj"]        # ready for apply
+    return st
 
 
 @app.post("/api/organize/apply")
 def organize_apply(body: dict = Body(default={})):
+    """Start the reorg as a throttled, idle-aware BACKGROUND job so it never
+    fights the user for the machine. Poll /api/organize/apply_status."""
     plan = STATE.get("plan")
     if not plan:
         return JSONResponse({"error": "no plan built yet"}, status_code=400)
     excl = set(body.get("excluded", []))
+    overrides = body.get("overrides", {}) or {}   # {src: "Folder/Sub"} manual re-home
     for pr in plan.proposals:
         pr.excluded = pr.src in excl
-    return p3.apply_plan(plan, JOURNAL)
+        folder = overrides.get(pr.src)
+        if folder:
+            safe = os.path.normpath(folder.strip("/\\")).lstrip(".\\/")
+            pr.dst = str(Path(plan.root) / "_Organized" / Path(safe) / pr.new_name)
+    mode = body.get("run_mode", "eco")   # idle | eco | now
+    companion.log("organize",
+                  f"Reorg approved — applying {len([p for p in plan.proposals if not p.excluded])} "
+                  f"move(s) in {mode} mode", "start")
+    return p3.start_apply(plan, JOURNAL, mode)
+
+
+@app.get("/api/organize/apply_status")
+def organize_apply_status():
+    return p3.apply_job_status()
+
+
+@app.post("/api/organize/pause")
+def organize_pause():
+    return p3.pause_job()
+
+
+@app.post("/api/organize/resume")
+def organize_resume():
+    return p3.resume_job()
+
+
+@app.post("/api/organize/cancel")
+def organize_cancel():
+    return p3.cancel_job()
 
 
 @app.post("/api/organize/undo")
 def organize_undo():
-    return p3.undo(JOURNAL)
+    out = p3.undo(JOURNAL)
+    companion.log("organize", f"Undo — {out.get('restored', 0)} file(s) restored", "done")
+    return out
 
 
 # --------------------------------------------------------------------------

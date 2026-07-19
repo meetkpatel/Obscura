@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Obscura Companion</title>
+<style>
+/* Offline by design: zero external fonts, scripts, or styles. */
+:root{
+  --bg:#070b12; --panel:#0f1723; --panel2:#151f2d; --line:#233047;
+  --ink:#eaf1fb; --muted:#8598b5; --faint:#5f6f8a;
+  --accent:#19c3a5; --accent2:#12a88f; --blue:#5aa0ff;
+  --warn:#f2b544; --crit:#ff5c6c; --rSm:10px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:
+  radial-gradient(700px 360px at 85% -12%,#123a4d55,transparent),
+  radial-gradient(600px 340px at 0% 0%,#12224355,transparent),var(--bg);
+  color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding-bottom:88px}
+header{display:flex;align-items:center;gap:10px;padding:16px 18px 8px}
+.logo{font-size:20px;font-weight:800;letter-spacing:-.4px}
+.logo span{color:var(--accent)}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+  background:#0c241f;color:var(--accent);font-size:11.5px;font-weight:650;border:1px solid #12463c;margin-left:auto}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 2s infinite}
+@keyframes pulse{50%{opacity:.45}}
+.sub{color:var(--faint);font-size:12px;padding:0 18px 10px}
+main{padding:0 14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
+.card h3{margin:0 0 10px;font-size:14px;color:var(--muted);font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+.row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #1a2536;font-size:14px}
+.row:last-child{border-bottom:none}
+.row .k{color:var(--muted);flex:1}
+.row .v{font-weight:700}
+.stat{display:flex;gap:10px;flex-wrap:wrap}
+.tile{flex:1;min-width:90px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
+.tile .n{font-size:22px;font-weight:800}
+.tile .l{font-size:11px;color:var(--muted);margin-top:2px}
+button{font:inherit;cursor:pointer;border:none;border-radius:var(--rSm);padding:12px 16px;width:100%;
+  background:linear-gradient(180deg,var(--accent),var(--accent2));color:#052019;font-weight:750;margin-top:8px}
+button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+button.warn{background:linear-gradient(180deg,var(--warn),#d99a2b);color:#241a05}
+button:disabled{opacity:.4}
+.btnRow{display:flex;gap:8px}
+.btnRow button{flex:1}
+select,input{font:inherit;width:100%;padding:11px 12px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:var(--rSm);color:var(--ink);margin-top:8px}
+.bar{height:8px;background:var(--panel2);border-radius:99px;overflow:hidden;margin:8px 0 4px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--blue));width:0%;transition:width .5s}
+.feed{max-height:44vh;overflow:auto}
+.ev{display:flex;gap:9px;padding:8px 0;border-bottom:1px solid #1a2536;font-size:13px}
+.ev:last-child{border-bottom:none}
+.ev .t{color:var(--faint);font-size:11px;white-space:nowrap;padding-top:2px}
+.ev .p{font-weight:700;color:var(--blue);white-space:nowrap}
+.ev.done .p{color:var(--accent)} .ev.error .p{color:var(--crit)} .ev.start .p{color:var(--warn)}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:#0b111ce8;backdrop-filter:blur(12px);
+  border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom))}
+nav div{flex:1;text-align:center;padding:9px 4px;color:var(--muted);font-size:12px;font-weight:650;border-radius:10px;cursor:pointer}
+nav div.on{color:#052019;background:linear-gradient(180deg,var(--accent),var(--accent2))}
+nav .i{display:block;font-size:19px;margin-bottom:2px}
+.hide{display:none}
+.note{font-size:12px;color:var(--faint);line-height:1.5;margin-top:8px}
+.pill{display:inline-block;padding:3px 9px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);
+  font-size:11.5px;color:var(--muted);margin:2px 2px 0 0}
+.score{font-size:34px;font-weight:800}
+.good{color:var(--accent)} .mid{color:var(--warn)} .bad{color:var(--crit)}
+#toast{position:fixed;left:14px;right:14px;bottom:96px;background:#0c241f;border:1px solid #12463c;color:var(--accent);
+  padding:12px 14px;border-radius:12px;font-size:13.5px;font-weight:650;opacity:0;transition:.25s;pointer-events:none;z-index:60}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Obscura <span>Companion</span></div>
+  <span class="badge"><span class="dot"></span><span id="link">linked</span></span>
+</header>
+<div class="sub">Direct to your machine — no cloud, no relay. Status &amp; controls only; documents never leave the desktop.</div>
+
+<main>
+  <!-- NOW -->
+  <section id="v-now">
+    <div class="card"><h3>Now running</h3><div id="jobs"><div class="note">Nothing running. Dispatch work from the ⚡ tab.</div></div></div>
+    <div class="card"><h3>At a glance</h3>
+      <div class="stat">
+        <div class="tile"><div class="n" id="gPages">–</div><div class="l">Redact pages</div></div>
+        <div class="tile"><div class="n" id="gBoxes">–</div><div class="l">Items found</div></div>
+        <div class="tile"><div class="n" id="gSafety">–</div><div class="l">Safety score</div></div>
+        <div class="tile"><div class="n" id="gPerf">–</div><div class="l">Perf score</div></div>
+      </div>
+    </div>
+    <div class="card"><h3>Activity</h3><div class="feed" id="feed"><div class="note">Waiting for activity…</div></div></div>
+  </section>
+
+  <!-- DISPATCH -->
+  <section id="v-dispatch" class="hide">
+    <div class="card"><h3>🔒 Security + optimization scan</h3>
+      <div class="note">Scans Downloads / Documents / Desktop for exposed secrets, risky settings and reclaimable clutter. Runs on the desktop; you watch from here.</div>
+      <label class="note">Gemma explanations
+        <select id="scGemma"><option value="1" selected>On (plain-English what/why/fix)</option><option value="0">Off (fast, deterministic only)</option></select></label>
+      <button id="scGo" onclick="dispatchScan()">Dispatch scan</button>
+      <div id="scState" class="note"></div>
+    </div>
+    <div class="card"><h3>🗂 Organize</h3>
+      <div class="note">Build a reorganization plan now — review and approve it from your phone when it's ready.</div>
+      <select id="ogScope">
+        <option value="downloads" selected>Downloads folder</option>
+        <option value="home">Whole home folder</option>
+        <option value="folder">Custom path…</option>
+      </select>
+      <input id="ogPath" class="hide" placeholder="C:\Users\me\Some Folder">
+      <select id="ogLayout">
+        <option value="by-type" selected>Layout: by document type</option>
+        <option value="by-patient">Layout: patient-centric</option>
+      </select>
+      <select id="ogMode">
+        <option value="eco" selected>Pace: eco (gentle)</option>
+        <option value="idle">Pace: idle-only (waits for you to step away)</option>
+        <option value="now">Pace: now (full speed)</option>
+      </select>
+      <button onclick="dispatchPlan()">Build plan</button>
+      <div id="ogState" class="note"></div>
+    </div>
+  </section>
+
+  <!-- REVIEW -->
+  <section id="v-review" class="hide">
+    <div class="card" id="planCard"><h3>Organize — pending approval</h3><div id="planBody"><div class="note">No plan awaiting review.</div></div></div>
+    <div class="card"><h3>Reorg controls</h3>
+      <div class="bar"><i id="apBar"></i></div>
+      <div class="note" id="apText">No reorg running.</div>
+      <div class="btnRow">
+        <button class="ghost" onclick="post('/api/organize/pause')">Pause</button>
+        <button class="ghost" onclick="post('/api/organize/resume')">Resume</button>
+        <button class="warn" onclick="post('/api/organize/cancel')">Cancel</button>
+      </div>
+      <button class="ghost" onclick="undo()">Undo last reorg</button>
+    </div>
+    <div class="card"><h3>Redact — monitor</h3>
+      <div id="rdBody"><div class="note">Redaction review happens on the desktop (documents never leave it). This shows progress + the verification verdict.</div></div>
+    </div>
+    <div class="card"><h3>Secure — results</h3><div id="scBody"><div class="note">No scan results yet.</div></div></div>
+  </section>
+
+  <!-- PRIVACY -->
+  <section id="v-privacy" class="hide">
+    <div class="card"><h3>Egress proof</h3>
+      <div class="note">Live from the desktop: every remote connection of the Obscura process tree. Your phone shows up as <b>inbound</b> — a paired device connecting IN, not data going out.</div>
+      <button class="ghost" onclick="egress()">Check now</button>
+      <div id="egBody"></div>
+    </div>
+    <div class="card"><h3>How this stays private</h3>
+      <div class="note">
+        • Your phone talks <b>directly</b> to your computer — same Wi-Fi, or your own Tailscale/WireGuard tunnel on cellular. No cloud relay ever sees a byte.<br><br>
+        • This page gets job states, counts and scores — <b>never document pages, text, or file contents</b>.<br><br>
+        • Access needs the pairing token from the desktop QR. It rotates every time Obscura restarts.
+      </div>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <div class="on" data-v="now" onclick="tab('now')"><span class="i">📟</span>Now</div>
+  <div data-v="dispatch" onclick="tab('dispatch')"><span class="i">⚡</span>Dispatch</div>
+  <div data-v="review" onclick="tab('review')"><span class="i">✅</span>Review</div>
+  <div data-v="privacy" onclick="tab('privacy')"><span class="i">🔐</span>Privacy</div>
+</nav>
+<div id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+// pairing token: from ?t= (first scan) -> localStorage -> header on every call
+const qs=new URLSearchParams(location.search);
+if(qs.get('t')){ localStorage.setItem('obscura_t',qs.get('t')); history.replaceState({},'',location.pathname); }
+const TOKEN=localStorage.getItem('obscura_t')||'';
+async function jfetch(url,opt={}){
+  opt.headers=Object.assign({'X-Obscura-Token':TOKEN},opt.headers||{});
+  const r=await fetch(url,opt);
+  if(r.status===403){ $('#link').textContent='not paired'; throw new Error('not paired'); }
+  return r.json();
+}
+async function post(url,body){ try{ const r=await jfetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})}); poll(); return r; }catch(e){ toast(e.message); } }
+function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2600); }
+function tab(v){ document.querySelectorAll('nav div').forEach(d=>d.classList.toggle('on',d.dataset.v===v));
+  ['now','dispatch','review','privacy'].forEach(x=>$('#v-'+x).classList.toggle('hide',x!==v)); }
+$('#ogScope').onchange=e=>$('#ogPath').classList.toggle('hide',e.target.value!=='folder');
+
+// ---- dispatch actions -------------------------------------------------------
+async function dispatchScan(){
+  $('#scGo').disabled=true;
+  const r=await post('/api/secure/scan_start',{use_gemma:$('#scGemma').value==='1'});
+  if(r&&r.error) toast(r.error); else toast('Scan dispatched — watch the Now tab');
+  $('#scGo').disabled=false;
+}
+async function dispatchPlan(){
+  const scope=$('#ogScope').value;
+  const body={scope,layout:$('#ogLayout').value,run_mode:$('#ogMode').value,profile:'healthcare'};
+  if(scope==='folder') body.path=$('#ogPath').value.trim();
+  const r=await post('/api/organize/plan',body);
+  if(r&&r.error) toast(r.error); else { PLAN=null; PLAN_APPLIED=false; toast('Plan build dispatched'); tab('now'); }
+}
+let PLAN=null, PLAN_APPLIED=false;
+function renderPlan(p){
+  PLAN=p;
+  const dup=p.proposals.filter(x=>x.is_duplicate).length;
+  const sens=p.proposals.filter(x=>x.sensitive).length;
+  const folders=[...new Set(p.proposals.filter(x=>!x.is_duplicate).map(x=>x.category))];
+  $('#planBody').innerHTML=`
+    <div class="stat">
+      <div class="tile"><div class="n">${p.proposals.length}</div><div class="l">files</div></div>
+      <div class="tile"><div class="n">${dup}</div><div class="l">duplicates</div></div>
+      <div class="tile"><div class="n">${sens}</div><div class="l">sensitive</div></div>
+    </div>
+    <div style="margin-top:8px">${folders.slice(0,10).map(f=>`<span class="pill">${f}</span>`).join('')}</div>
+    <div class="note">Root: ${p.root}. Files move into an <b>_Organized</b> folder — fully journaled and undoable. Per-file tweaks are available on the desktop; approving here applies the plan as proposed.</div>
+    <button onclick="approvePlan()">Approve &amp; apply (${$('#ogMode').value||'eco'})</button>`;
+}
+async function approvePlan(){
+  const r=await post('/api/organize/apply',{run_mode:$('#ogMode') ? $('#ogMode').value : 'eco'});
+  if(r&&r.error) toast(r.error);
+  else { PLAN_APPLIED=true; $('#planBody').innerHTML='<div class="note">Applying — watch Reorg controls below.</div>'; toast('Reorg started'); }
+}
+async function undo(){ const r=await post('/api/organize/undo'); if(r) toast(`Restored ${r.restored??0} file(s)`); }
+
+// ---- egress -----------------------------------------------------------------
+async function egress(){
+  try{
+    const e=await jfetch('/api/egress');
+    const rows=e.connections.filter(c=>c.label!=='local').slice(0,12).map(c=>
+      `<div class="row"><span class="k">${c.raddr}</span><span class="v" style="color:${c.label==='EXTERNAL'?'var(--crit)':'var(--accent)'};font-size:12px">${c.label}</span></div>`).join('');
+    $('#egBody').innerHTML=`<div class="score ${e.external_count===0?'good':'bad'}">${e.external_count} external</div>
+      <div class="note">${e.verdict}</div>${rows}`;
+  }catch(err){ toast('Could not fetch egress'); }
+}
+
+// ---- polling loop -----------------------------------------------------------
+let SINCE=0;
+function fmtT(ts){ const d=new Date(ts*1000); return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+async function poll(){
+  try{
+    const s=await jfetch('/api/status/summary');
+    $('#link').textContent='linked';
+    // glance tiles
+    $('#gPages').textContent=s.redact.pages||'–';
+    $('#gBoxes').textContent=s.redact.pages?s.redact.boxes:'–';
+    const ss=s.secure.safety_score, ps=s.secure.performance_score;
+    $('#gSafety').textContent=(ss??'–'); $('#gSafety').className='n '+(ss==null?'':ss>=80?'good':ss>=50?'mid':'bad');
+    $('#gPerf').textContent=(ps??'–'); $('#gPerf').className='n '+(ps==null?'':ps>=80?'good':ps>=50?'mid':'bad');
+    // jobs
+    const jobs=[];
+    if(s.secure.state==='running') jobs.push(`<div class="row"><span class="k">🔒 Security + optimization scan</span><span class="v">running…</span></div>`);
+    if(s.organize.plan_state==='running'){
+      const pct=s.organize.plan_total?Math.round(100*s.organize.plan_done/s.organize.plan_total):0;
+      jobs.push(`<div class="row"><span class="k">🗂 Plan build — ${s.organize.plan_done}/${s.organize.plan_total} files</span><span class="v">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div>`);
+    }
+    const ap=s.organize.apply;
+    if(ap.state==='running'){
+      const pct=ap.total?Math.round(100*ap.done/ap.total):0;
+      jobs.push(`<div class="row"><span class="k">🗂 Reorganizing — ${ap.done}/${ap.total} (${ap.moved} moved)</span><span class="v">${pct}%</span></div><div class="bar"><i style="width:${pct}%"></i></div>`);
+    }
+    $('#jobs').innerHTML=jobs.join('')||'<div class="note">Nothing running. Dispatch work from the ⚡ tab.</div>';
+    // review tab: apply progress + redact monitor
+    const pct=ap.total?Math.round(100*ap.done/ap.total):0;
+    $('#apBar').style.width=pct+'%';
+    $('#apText').textContent=ap.state==='idle'?'No reorg running.':`${ap.state} — ${ap.done}/${ap.total}, ${ap.moved} moved, ${ap.skipped} skipped`+(ap.gate&&ap.gate.paused?' (paused)':'');
+    $('#rdBody').innerHTML=s.redact.pages?`
+      <div class="row"><span class="k">Pages loaded</span><span class="v">${s.redact.pages}</span></div>
+      <div class="row"><span class="k">Pages scanned</span><span class="v">${s.redact.pages_detected}/${s.redact.pages}</span></div>
+      <div class="row"><span class="k">Sensitive items found</span><span class="v">${s.redact.boxes}</span></div>
+      ${s.redact.verify_passed!=null?`<div class="row"><span class="k">Verification</span><span class="v ${s.redact.verify_passed?'good':'bad'}">${s.redact.verify_passed?'PASSED':'FAILED'} · ${s.redact.redacted_count} removed</span></div>`:''}
+      <div class="note">Box-by-box review stays on the desktop by design.</div>`
+      :'<div class="note">No document loaded. Load one on the desktop; progress shows here.</div>';
+    // secure results
+    if(s.secure.state==='done'){
+      $('#scBody').innerHTML=`
+        <div class="row"><span class="k">Safety score</span><span class="v ${ss>=80?'good':ss>=50?'mid':'bad'}">${ss}/100</span></div>
+        <div class="row"><span class="k">Findings</span><span class="v">${s.secure.findings}</span></div>
+        <div class="row"><span class="k">Performance score</span><span class="v ${ps>=80?'good':ps>=50?'mid':'bad'}">${ps}/100</span></div>
+        <div class="row"><span class="k">Reclaimable space</span><span class="v">${s.secure.reclaimable_mb>=1024?(s.secure.reclaimable_mb/1024).toFixed(1)+' GB':s.secure.reclaimable_mb+' MB'}</span></div>
+        <div class="note">Full finding-by-finding detail + fixes on the desktop.</div>`;
+    } else if(s.secure.state==='error'){ $('#scBody').innerHTML=`<div class="note">Scan error: ${s.secure.error||''}</div>`; }
+    $('#scState').textContent=s.secure.state==='running'?'Scan running — results land in Review.':'';
+    $('#ogState').textContent=s.organize.plan_state==='running'?'Plan building — watch Now tab.':(s.organize.plan_ready?'A plan is awaiting approval in Review.':'');
+    // pending plan for review
+    if(s.organize.plan_ready&&!PLAN&&!PLAN_APPLIED&&ap.state!=='running'){
+      const st=await jfetch('/api/organize/plan_status');
+      if(st.plan) renderPlan(st.plan);
+    }
+    if(!s.organize.plan_ready){ PLAN=null; PLAN_APPLIED=false; $('#planBody').innerHTML='<div class="note">No plan awaiting review.</div>'; }
+    // events
+    const ev=await jfetch('/api/events?since='+SINCE);
+    if(ev.events.length){
+      if(SINCE===0) $('#feed').innerHTML='';
+      SINCE=ev.latest;
+      for(const e of ev.events){
+        const d=document.createElement('div'); d.className='ev '+e.kind;
+        d.innerHTML=`<span class="t">${fmtT(e.ts)}</span><span class="p">${e.phase}</span><span>${e.msg}</span>`;
+        $('#feed').prepend(d);
+      }
+      while($('#feed').children.length>60) $('#feed').lastChild.remove();
+    }
+  }catch(err){ /* link badge already flipped on 403; transient network errors just skip a beat */ }
+  setTimeout(poll,2500);
+}
+poll();
+</script>
+</body>
+</html>

@@ -233,6 +233,36 @@ def _box_from_words(ws: list[dict], hit: dict, pad_frac: float) -> Box:
               reason=hit.get("reason") or "Matched by deterministic rule.")
 
 
+# Common legal/records words that NER (Presidio spaCy) and the LLM mislabel as
+# people/orgs/addresses but are NOT personal identifiers. Dropping these cuts the
+# over-boxing (e.g. "Grantor"/"Grantee" flagged as a person on every occurrence)
+# without touching real PII. Matched case-insensitively on the whole hit string.
+NON_PII_TERMS = {
+    "grantor", "grantee", "landlord", "tenant", "lessor", "lessee", "buyer",
+    "seller", "borrower", "lender", "mortgagor", "mortgagee", "party", "parties",
+    "plaintiff", "defendant", "petitioner", "respondent", "witness", "witnesses",
+    "notary", "notary public", "affiant", "declarant", "the undersigned",
+    "easement", "agreement", "deed", "exhibit", "attachment", "schedule",
+    "poles", "pole", "premises", "property", "recitals", "whereas", "hereinafter",
+    "state", "county", "city", "commonwealth", "corporation", "company", "llc",
+    "inc", "the", "and", "of", "for",
+}
+
+
+def _denied(hit: dict) -> bool:
+    """True if this hit is a known non-PII term (drop it) or empty. Drops both a
+    lone role word ('Grantor') and a phrase made only of them ('the Easement')."""
+    t = re.sub(r"[^a-z0-9 ]", "", (hit.get("text") or "").strip().lower()).strip()
+    if not t:
+        return True
+    if t in NON_PII_TERMS:
+        return True
+    words = t.split()
+    if words and all(w in NON_PII_TERMS for w in words):
+        return True
+    return False
+
+
 def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s).lower()
 
@@ -334,11 +364,16 @@ def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06,
     back to an OCR-tolerant fuzzy match. Any hit that STILL can't be located is
     appended to `ungrounded` (when provided) so the caller can surface it -- a
     detected-but-unplaceable item is a silent miss otherwise, which for a
-    recall-biased redactor is the most dangerous failure mode."""
+    recall-biased redactor is the most dangerous failure mode.
+
+    Non-PII terms (legal roles, generic nouns) are dropped up front to curb
+    over-boxing."""
     boxes: list[Box] = []
     claimed: set[tuple[str, int]] = set()
     norm_words = [_norm(w["text"]) for w in words]
     for hit in hits:
+        if _denied(hit):
+            continue
         target = _norm(hit["text"])
         if len(target) < 2:
             continue
@@ -510,14 +545,22 @@ def _contained(b: Box, k: Box, frac=0.6) -> bool:
 
 
 def merge(boxes: list[Box], thresh=0.5) -> list[Box]:
-    # keep bigger, higher-confidence boxes first; drop overlaps and near-duplicates
+    # keep bigger, higher-confidence boxes first; drop overlaps and near-duplicates.
+    # Presidio + Gemma often tag the SAME entity, so same-category overlaps collapse
+    # at a lower bar (they're the same thing detected twice).
     boxes = sorted(boxes, key=lambda b: (-b.confidence,
                                          -((b.x2 - b.x1) * (b.y2 - b.y1))))
     kept: list[Box] = []
     for b in boxes:
-        if any(_iou(b, k) >= thresh or _contained(b, k) for k in kept):
-            continue
-        kept.append(b)
+        drop = False
+        for k in kept:
+            iou = _iou(b, k)
+            same_cat_thresh = 0.3 if b.category == k.category else thresh
+            if iou >= same_cat_thresh or _contained(b, k):
+                drop = True
+                break
+        if not drop:
+            kept.append(b)
     return kept
 
 
