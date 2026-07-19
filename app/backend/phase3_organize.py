@@ -302,13 +302,40 @@ GEN_PROMPT = (
     '"descriptor":"short-kebab-name","confidence":0.0}'
 )
 
+# AUTO: one classifier that first decides clinical-vs-general, so a mixed folder
+# organizes correctly without the user picking a profile.
+UNIFIED_PROMPT = (
+    "You are a file organizer. First decide whether this file is a CLINICAL "
+    "medical record (patient chart, lab result, visit/progress note, imaging, "
+    "prescription, referral, insurance card, EOB, billing/claim, consent/intake) "
+    "or a GENERAL document (invoice, receipt, resume, contract, report, letter, "
+    "photo, note, statement, presentation). Return ONLY JSON:\n"
+    '{"is_clinical":true or false,'
+    '"doc_type":"if clinical use: visit-note|progress-note|lab-result|imaging-report|'
+    'pathology-report|medication-list|prescription|referral|consult-note|'
+    'discharge-summary|immunization|insurance-card|eob|billing-statement|claim|'
+    'consent-form|intake-form|correspondence ; if general use: invoice|contract|'
+    'report|resume|receipt|letter|photo|statement|presentation|spreadsheet|note|other",'
+    '"category":"for general docs only: Finance|Legal|Work|Personal|Medical|Media|Other",'
+    '"patient":"Last-First or empty","doc_date":"YYYY-MM-DD or empty",'
+    '"descriptor":"3-5 word kebab summary"}'
+)
+
+
+def _is_clinical(meta: dict) -> bool:
+    if meta.get("is_clinical") is True:
+        return True
+    dt = (meta.get("doc_type") or "").lower()
+    return dt in HC_DOCTYPES and dt != "other"
+
 
 def classify(fp: Path, model: str, cache: dict, profile: str) -> dict:
     qh = quick_hash(fp)
     if qh and qh in cache:
         return cache[qh]
     snip, imgs = signature(fp)
-    prompt = (HC_PROMPT if profile == "healthcare" else GEN_PROMPT) + f"\n\nFILE:\n{snip}"
+    base = HC_PROMPT if profile == "healthcare" else UNIFIED_PROMPT if profile == "auto" else GEN_PROMPT
+    prompt = base + f"\n\nFILE:\n{snip}"
     try:
         data = gemma.generate_json(prompt, model=model, images=imgs or None,
                                    num_predict=300, timeout=180)
@@ -353,7 +380,12 @@ def _confidence(meta: dict, profile: str) -> float:
     reliable than the model's self-reported score (E4B usually returns 0).
     Rewards a recognized doc type + a found patient + a found date."""
     dtype = (meta.get("doc_type") or "other").lower()
-    known = dtype in HC_DOCTYPES if profile == "healthcare" else dtype not in ("", "other")
+    if profile == "healthcare":
+        known = dtype in HC_DOCTYPES
+    elif profile == "auto":
+        known = _is_clinical(meta) or (meta.get("category") not in ("", "Other", None))
+    else:
+        known = dtype not in ("", "other")
     c = 0.35
     if known and dtype != "other":
         c += 0.30
@@ -370,7 +402,10 @@ def _place(meta: dict, profile: str) -> tuple[str, str, str]:
     dtype = sanitize((meta.get("doc_type") or "other").lower(), 20) or "other"
     date = _clean_date(meta.get("doc_date"))
     desc = sanitize(meta.get("descriptor"), 40) or "document"
-    if profile == "healthcare":
+    # Route clinical docs to the healthcare tree; general docs to categories.
+    # healthcare = always clinical; auto = per-file; general = never clinical.
+    clinical = profile == "healthcare" or (profile == "auto" and _is_clinical(meta))
+    if clinical:
         cat, sub = HC_DOCTYPES.get((meta.get("doc_type") or "other").lower(),
                                    ("Administrative", "Other"))
         patient = normalize_patient(meta.get("patient"))   # order-stable per patient
@@ -417,8 +452,9 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
             continue
         cat, sub, base_name = _place(meta, profile)
         patient_norm = normalize_patient(meta.get("patient"))
-        # folder parts depend on the chosen layout
-        if layout == "by-patient" and profile == "healthcare":
+        is_clin = profile == "healthcare" or (profile == "auto" and _is_clinical(meta))
+        # folder parts depend on the chosen layout (patient view only for clinical docs)
+        if layout == "by-patient" and is_clin:
             pfolder = patient_norm or "Unassigned"
             parts = ["Patients", pfolder] + ([sub or cat] if (sub or cat) else [])
         else:  # by-type
@@ -439,7 +475,7 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
         dtype_l = (meta.get("doc_type") or "").lower()
         is_audio = fp.suffix.lower() in AUDIO_EXTS
         # PHI candidate: a clinical doc type or a file tied to a named patient
-        sensitive = profile == "healthcare" and (dtype_l in PHI_DOCTYPES or bool(patient_norm))
+        sensitive = is_clin and (dtype_l in PHI_DOCTYPES or bool(patient_norm) or _is_clinical(meta))
         proposals.append(FileProposal(
             src=str(fp), dst=dst, old_name=fp.name, new_name=new_name,
             category=cat, subcategory=sub, doc_type=meta.get("doc_type", ""),

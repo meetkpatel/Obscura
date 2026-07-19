@@ -317,8 +317,9 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
               <option value="downloads">Downloads</option>
               <option value="home">Whole user profile</option>
             </select>
-            <select id="profileSel" class="field" style="width:auto;margin:0">
-              <option value="healthcare" selected>Healthcare</option>
+            <select id="profileSel" class="field" style="width:auto;margin:0" title="Auto detects clinical vs general per file">
+              <option value="auto" selected>Auto (detect)</option>
+              <option value="healthcare">Healthcare</option>
               <option value="general">General</option>
             </select>
             <select id="layoutSel" class="field" style="width:auto;margin:0" title="How to structure the folders">
