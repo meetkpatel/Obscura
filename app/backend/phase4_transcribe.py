@@ -22,21 +22,22 @@ AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma", ".webm"}
 
 SCRIBE_PROMPT = (
     "You are an on-device medical scribe. Turn the clinician's dictation below "
-    "into a clean, structured clinical note. Return ONLY JSON:\n"
+    "into a structured clinical note. Keep EACH soap section to 1-2 concise "
+    "sentences. Fill ALL four soap sections and the phi_found list. Return ONLY "
+    "JSON in this exact order:\n"
     '{"patient":"name or empty","date":"YYYY-MM-DD or empty",'
-    '"soap":{"subjective":"...","objective":"...","assessment":"...","plan":"..."},'
     '"summary":"one-line summary",'
-    '"phi_found":["each patient identifier you see: names, dates, MRNs, phone, '
-    'address, etc."]}\n'
-    "Keep the clinical content faithful to the dictation — do not invent findings. "
-    "If a SOAP section has nothing, use an empty string.\n\nDICTATION:\n"
+    '"phi_found":["every patient identifier present: names, dates, MRN, member/'
+    'account numbers, phone, address"],'
+    '"soap":{"subjective":"...","objective":"...","assessment":"...","plan":"..."}}\n'
+    "Be faithful to the dictation — do not invent findings.\n\nDICTATION:\n"
 )
 
 
 def _structure(text: str, model: str) -> dict:
     try:
         data = gemma.generate_json(SCRIBE_PROMPT + text[:6000], model=model,
-                                   num_predict=900, timeout=240)
+                                   num_predict=1500, timeout=300)
         if isinstance(data, dict):
             data.setdefault("soap", {})
             data.setdefault("phi_found", [])
