@@ -6,6 +6,10 @@
 
 Obscura is a focused hackathon clinical scribe. It turns a synthetic clinical conversation into an editable, transcript-grounded SOAP draft.
 
+## Demo
+
+[Watch the 2:26 clinical-scribe walkthrough](demo/obscura-clinical-scribe-demo.mp4).
+
 ## Stack
 
 - Focused recording, templates, and review workflow
