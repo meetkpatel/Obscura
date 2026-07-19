@@ -521,6 +521,13 @@ def _perf_plan(opts: list[Finding], reclaim_mb: int, model: str) -> str:
         f"Reclaimable space: ~{reclaim_mb} MB. Findings: {items}"
     )
     try:
-        return gemma.collapse_repeats(gemma.generate(prompt, model=model, num_predict=260).strip())
+        out = gemma.collapse_repeats(gemma.generate(prompt, model=model, num_predict=260).strip())
     except gemma.GemmaError:
-        return ""
+        out = ""
+    if out:
+        return out
+    # deterministic fallback if the model returns nothing (e.g. busy/cold)
+    top = opts[0].title if opts else "temporary files"
+    return (f"Start with the biggest win: {top}. Everything here uses built-in "
+            f"Windows tools (Disk Cleanup, Storage Sense, Task Manager) — no risky "
+            f"registry edits. About {reclaim_mb} MB is safely reclaimable.")
