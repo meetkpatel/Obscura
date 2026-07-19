@@ -35,8 +35,6 @@ import { useActivePanel } from "../utils/hooks/useActivePanel";
 import { handleProcessingComplete } from "../utils/helpers/processingHelpers";
 import { areRequiredDemographicsMet } from "../utils/helpers/validationHelpers";
 import { DEFAULT_TOAST_CONFIG } from "../utils/constants";
-import { isHackathonMode } from "../utils/helpers/featureFlags";
-import LocalDraftBanner from "../components/patient/LocalDraftBanner";
 
 const PatientDetails = ({
     patient: initialPatient,
@@ -47,7 +45,6 @@ const PatientDetails = ({
     onResetLetter,
     onStartNewNote,
 }) => {
-    const focusedDemo = isHackathonMode();
     const location = useLocation();
     const isNewPatient = location.pathname === "/new-note";
     const { viaModal, cameFromSearch } = location.state || {};
@@ -608,7 +605,6 @@ const PatientDetails = ({
     return (
         <Box p={[2, 4, 5]} borderRadius="sm" w="100%" pb="100px">
             <VStack spacing={[3, 4, 5]} align="stretch">
-                {focusedDemo && <LocalDraftBanner />}
                 <PatientInfoBar patient={patient} onEdit={onOpenDemographics} />
 
                 <Summary
@@ -659,7 +655,7 @@ const PatientDetails = ({
                     patientName={patient?.name}
                 />
 
-                {!focusedDemo && <Letter
+                <Letter
                     isOpen={isOpen("letter")}
                     onClose={() => close("letter")}
                     finalCorrespondence={letterHook.finalCorrespondence}
@@ -677,9 +673,9 @@ const PatientDetails = ({
                     toast={toast}
                     patient={patient}
                     setLoading={setLoading}
-                />}
+                />
 
-                {!focusedDemo && <Chat
+                <Chat
                     isOpen={isOpen("chat")}
                     onClose={() => close("chat")}
                     chatLoading={chat.loading}
@@ -701,15 +697,15 @@ const PatientDetails = ({
                     rawTranscription={patient.raw_transcription}
                     currentTemplate={currentTemplate}
                     patientData={patient}
-                />}
+                />
 
-                {!focusedDemo && <ReasoningPanel
+                <ReasoningPanel
                     isOpen={isOpen("reasoning")}
                     onClose={() => close("reasoning")}
                     noteId={patient?.id}
                     initialReasoning={patient?.reasoning_output}
                     onReasoningGenerated={handleReasoningGenerated}
-                />}
+                />
             </VStack>
 
             {/* Scribe Pill Box - centered at bottom */}
@@ -737,7 +733,7 @@ const PatientDetails = ({
             />
 
             {/* Floating Action Menu - always expanded on right side */}
-            {!focusedDemo && <FloatingActionMenu
+            <FloatingActionMenu
                 onOpenChat={handleOpenChat}
                 onOpenLetter={handleOpenLetter}
                 onOpenReasoning={handleOpenReasoning}
@@ -754,7 +750,7 @@ const PatientDetails = ({
                 )}
                 showPreviousVisitDot={showPreviousVisitDot}
                 isEncounterSaved={Boolean(patient?.id)}
-            />}
+            />
 
             {/* Transcription Panel */}
             <TranscriptionPanel
@@ -774,7 +770,7 @@ const PatientDetails = ({
             />
 
             {/* Document Panel */}
-            {!focusedDemo && <DocumentPanel
+            <DocumentPanel
                 isOpen={isOpen("document")}
                 onClose={() => close("document")}
                 handleDocumentComplete={handleDocumentComplete}
@@ -789,10 +785,10 @@ const PatientDetails = ({
                 template={currentTemplate}
                 docFileName={docFileName}
                 setDocFileName={setDocFileName}
-            />}
+            />
 
             {/* Previous Visit Panel */}
-            {!focusedDemo && <PreviousVisitPanel
+            <PreviousVisitPanel
                 isOpen={isOpen("previous-visit")}
                 onClose={() => close("previous-visit")}
                 previousVisitSummary={patient.previous_visit_summary}
@@ -802,7 +798,7 @@ const PatientDetails = ({
                     patient.previous_visit_encounter_date
                 }
                 templates={templates}
-            />}
+            />
         </Box>
     );
 };

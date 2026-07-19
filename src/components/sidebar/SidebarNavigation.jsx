@@ -12,10 +12,7 @@ import { FaClinicMedical, FaTasks } from "react-icons/fa";
 import { GiBrain } from "react-icons/gi";
 import { SettingsIcon } from "../common/icons";
 import { colors } from "../../theme/colors";
-import {
-    isHackathonMode,
-    isRagEnabled,
-} from "../../utils/helpers/featureFlags";
+import { isRagEnabled } from "../../utils/helpers/featureFlags";
 import { SectionHeader } from "./SidebarHelpers";
 import { useState } from "react";
 
@@ -93,8 +90,6 @@ const SidebarNavigation = ({
     incompleteJobsCount,
 }) => {
     const [isNavCollapsed, setIsNavCollapsed] = useState(false);
-    const focusedDemo = isHackathonMode();
-
     return (
         <Box w="100%">
             {/* Navigation Header - Collapsible when expanded */}
@@ -115,8 +110,6 @@ const SidebarNavigation = ({
                     w="100%"
                     py={isCollapsed ? 1 : 2}
                 >
-                    {/* Operational navigation is hidden in the focused demo. */}
-                    {!focusedDemo && <>
                     {/* Day Summary button */}
                     <Tooltip
                         label="Day Summary"
@@ -182,9 +175,6 @@ const SidebarNavigation = ({
                             </Box>
                         </Tooltip>
                     )}
-
-                    </>}
-
                     {/* Settings button */}
                     <Tooltip
                         label="Settings"

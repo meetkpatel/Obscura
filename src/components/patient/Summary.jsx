@@ -30,7 +30,6 @@ import { GreenButton, GreyButton } from "../common/Buttons";
 import { useTemplateSelection } from "../../utils/templates/templateContext";
 import { patientApi } from "../../utils/api/patientApi";
 import ConfirmLeaveModal from "../modals/ConfirmLeaveModal";
-import { isHackathonMode } from "../../utils/helpers/featureFlags";
 
 const Summary = forwardRef(
   (
@@ -66,7 +65,6 @@ const Summary = forwardRef(
       useState(false);
     const [pendingTemplateKey, setPendingTemplateKey] = useState(null);
     const toast = useToast();
-    const focusedDemo = isHackathonMode();
 
     const handleTemplateChange = async (e) => {
       const newTemplateKey = e.target.value;
@@ -266,7 +264,7 @@ const Summary = forwardRef(
               </VStack>
             </Box>
             <Flex mt="4" justifyContent="space-between">
-              {!focusedDemo && <Flex>
+              <Flex>
                 <Tooltip
                   label={
                     isEncounterSaved
@@ -286,7 +284,7 @@ const Summary = forwardRef(
                     </GreyButton>
                   </Box>
                 </Tooltip>
-              </Flex>}
+              </Flex>
               <Flex>
                 <GreyButton
                   onClick={onCopy}
@@ -305,7 +303,7 @@ const Summary = forwardRef(
                 >
                   {saveLoading ? "Saving..." : "Save Encounter"}
                 </GreyButton>
-                {!focusedDemo && <Tooltip
+                <Tooltip
                   label="Review AI-extracted jobs, then finish and move to a new note"
                   placement="top"
                 >
@@ -322,7 +320,7 @@ const Summary = forwardRef(
                       {wrapUpLoading ? "Wrapping..." : "Wrap Up"}
                     </GreenButton>
                   </Box>
-                </Tooltip>}
+                </Tooltip>
               </Flex>
             </Flex>
           </Collapse>

@@ -8,8 +8,6 @@ import {
     Select,
     VStack,
     Tooltip,
-    InputGroup,
-    InputRightElement,
     Tabs,
     TabList,
     TabPanels,
@@ -33,7 +31,6 @@ import {
 import {
     ChevronRightIcon,
     ChevronDownIcon,
-    CheckCircleIcon,
 } from "../common/icons";
 import {
     FaCog,
@@ -64,7 +61,6 @@ const ModelSettingsPanel = ({
     whisperModelListAvailable = false,
     whisperModelsLoading = false,
     llmModelsLoading = false,
-    urlStatus = { whisper: false, llm: false },
     onOpenLocalModelManager,
     showLocalManagerButton,
     modelManagerRefreshKey = 0,
@@ -589,56 +585,20 @@ const ModelSettingsPanel = ({
                                                     fontSize="md"
                                                     fontWeight="bold"
                                                 >
-                                                    Whisper via Groq
+                                                    Whisper transcription
                                                 </Text>
                                                 <Text
                                                     fontSize="sm"
                                                     color="gray.500"
                                                 >
-                                                    Hosted speech-to-text for the
-                                                    no-download MVP
+                                                    Speech-to-text model used for
+                                                    encounter audio
                                                 </Text>
                                             </Box>
 
                                             <VStack spacing={3} align="stretch">
                                                 <Box>
-                                                    <Tooltip label="Groq's OpenAI-compatible speech endpoint">
-                                                        <Text
-                                                            fontSize="sm"
-                                                            mb="1"
-                                                            fontWeight={"bold"}
-                                                        >
-                                                            API Base URL
-                                                        </Text>
-                                                    </Tooltip>
-                                                    <InputGroup size="sm">
-                                                        <Input
-                                                            value={
-                                                                config?.WHISPER_BASE_URL ||
-                                                                ""
-                                                            }
-                                                            onChange={(e) =>
-                                                                handleConfigChange(
-                                                                    "WHISPER_BASE_URL",
-                                                                    e.target
-                                                                        .value,
-                                                                )
-                                                            }
-                                                            placeholder="https://api.groq.com/openai"
-                                                            className="input-style"
-                                                        />
-                                                        {urlStatus.whisper && (
-                                                            <InputRightElement>
-                                                                <Tooltip label="Connection successful">
-                                                                    <CheckCircleIcon color="green.500" />
-                                                                </Tooltip>
-                                                            </InputRightElement>
-                                                        )}
-                                                    </InputGroup>
-                                                </Box>
-
-                                                <Box>
-                                                    <Tooltip label="Groq Whisper model used for transcription">
+                                                    <Tooltip label="Speech-to-text model used for transcription">
                                                         <Text
                                                             fontSize="sm"
                                                             mb="1"
@@ -709,33 +669,6 @@ const ModelSettingsPanel = ({
                                                     )}
                                                 </Box>
 
-                                                <Box>
-                                                    <Tooltip label="API key for authenticating with the Whisper service">
-                                                        <Text
-                                                            fontSize="sm"
-                                                            mb="1"
-                                                            fontWeight={"bold"}
-                                                        >
-                                                            API Key
-                                                        </Text>
-                                                    </Tooltip>
-                                                    <Input
-                                                        size="sm"
-                                                        type="password"
-                                                        value={
-                                                            config?.WHISPER_KEY ||
-                                                            ""
-                                                        }
-                                                        onChange={(e) =>
-                                                            handleConfigChange(
-                                                                "WHISPER_KEY",
-                                                                e.target.value,
-                                                            )
-                                                        }
-                                                        placeholder="gsk_..."
-                                                        className="input-style"
-                                                    />
-                                                </Box>
                                             </VStack>
                                         </VStack>
                                     </TabPanel>
@@ -748,83 +681,19 @@ const ModelSettingsPanel = ({
                                                     fontSize="md"
                                                     fontWeight="bold"
                                                 >
-                                                    Gemma via OpenRouter
+                                                    Gemma clinical model
                                                 </Text>
                                                 <Text
                                                     fontSize="sm"
                                                     color="gray.500"
                                                 >
-                                                    Hosted Gemma generates the
-                                                    grounded SOAP draft
+                                                    Generates transcript-grounded
+                                                    clinical drafts and assists
+                                                    with review
                                                 </Text>
                                             </Box>
 
                                             <VStack spacing={3} align="stretch">
-                                                <Box>
-                                                    <Tooltip label="Base URL for your OpenAI/Ollama-compatible LLM API endpoint">
-                                                        <Text
-                                                            fontSize="sm"
-                                                            mb="1"
-                                                            fontWeight={"bold"}
-                                                        >
-                                                            OpenAI/Ollama API
-                                                            Base URL
-                                                        </Text>
-                                                    </Tooltip>
-                                                    <InputGroup size="sm">
-                                                        <Input
-                                                            value={
-                                                                config?.LLM_BASE_URL ||
-                                                                ""
-                                                            }
-                                                            onChange={(e) =>
-                                                                handleConfigChange(
-                                                                    "LLM_BASE_URL",
-                                                                    e.target
-                                                                        .value,
-                                                                )
-                                                            }
-                                                            placeholder="https://openrouter.ai/api"
-                                                            className="input-style"
-                                                        />
-                                                        {urlStatus.llm && (
-                                                            <InputRightElement>
-                                                                <Tooltip label="Connection successful">
-                                                                    <CheckCircleIcon color="green.500" />
-                                                                </Tooltip>
-                                                            </InputRightElement>
-                                                        )}
-                                                    </InputGroup>
-                                                </Box>
-
-                                                <Box>
-                                                    <Tooltip label="API key for authenticating with the OpenAI/Ollama-compatible service">
-                                                        <Text
-                                                            fontSize="sm"
-                                                            mb="1"
-                                                            fontWeight={"bold"}
-                                                        >
-                                                            API Key
-                                                        </Text>
-                                                    </Tooltip>
-                                                    <Input
-                                                        size="sm"
-                                                        type="password"
-                                                        value={
-                                                            config?.LLM_API_KEY ||
-                                                            ""
-                                                        }
-                                                        onChange={(e) =>
-                                                            handleConfigChange(
-                                                                "LLM_API_KEY",
-                                                                e.target.value,
-                                                            )
-                                                        }
-                                                        placeholder="sk-or-v1-..."
-                                                        className="input-style"
-                                                    />
-                                                </Box>
-
                                                 <Box>
                                                     <Tooltip label="Primary model for generating responses and clinical notes">
                                                         <Text

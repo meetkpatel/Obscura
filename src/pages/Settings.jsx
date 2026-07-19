@@ -4,7 +4,6 @@ import {
     Text,
     VStack,
     useToast,
-    Button,
     useDisclosure,
 } from "@chakra-ui/react";
 import { useState, useEffect, useCallback } from "react";
@@ -18,23 +17,12 @@ import { SPECIALTIES } from "../utils/constants/index.jsx";
 import TemplateSettingsPanel from "../components/settings/TemplateSettingsPanel";
 import ChatSettingsPanel from "../components/settings/ChatSettingsPanel";
 import { isChatEnabled } from "../utils/helpers/featureFlags";
-import { isHackathonMode } from "../utils/helpers/featureFlags";
 import { templateService } from "../utils/services/templateService";
 import LocalModelManagerModal from "../components/modals/LocalModelManagerModal";
 import { localModelApi } from "../utils/api/localModelApi";
 import { useDebounce } from "../utils/hooks/useDebounce";
 
-const HOSTED_DEMO_CONFIG = {
-    LLM_PROVIDER: "openai",
-    LLM_BASE_URL: "https://openrouter.ai/api",
-    PRIMARY_MODEL: "google/gemma-4-26b-a4b-it",
-    SECONDARY_MODEL: "google/gemma-4-26b-a4b-it",
-    WHISPER_BASE_URL: "https://api.groq.com/openai",
-    WHISPER_MODEL: "whisper-large-v3-turbo",
-};
-
 const Settings = () => {
-    const focusedDemo = isHackathonMode();
     const [userSettings, setUserSettings] = useState({
         name: "",
         specialty: "",
@@ -362,20 +350,6 @@ const Settings = () => {
         }));
     };
 
-    const applyHostedDemoDefaults = () => {
-        setConfig((prev) => ({
-            ...prev,
-            ...HOSTED_DEMO_CONFIG,
-        }));
-        toast({
-            title: "Hosted demo endpoints selected",
-            description: "Paste your OpenRouter and Groq API keys below, then save.",
-            status: "success",
-            duration: 4000,
-            isClosable: true,
-        });
-    };
-
     const handleClearDatabase = async (newEmbeddingModel) => {
         await settingsService.clearDatabase(newEmbeddingModel, config, toast);
         // Refresh settings after database clear
@@ -397,26 +371,7 @@ const Settings = () => {
                 Settings
             </Text>
             <VStack spacing="5" align="stretch">
-                {focusedDemo && (
-                    <Box
-                        border="1px solid"
-                        borderColor="blue.200"
-                        bg="blue.50"
-                        borderRadius="lg"
-                        p="4"
-                    >
-                        <Text fontWeight="700">Hosted MVP setup</Text>
-                        <Text fontSize="sm" color="gray.700" mt="1" mb="3">
-                            Gemma runs through OpenRouter and Whisper runs through Groq.
-                            Paste both API keys in Model Settings, then save.
-                        </Text>
-                        <Button size="sm" colorScheme="blue" onClick={applyHostedDemoDefaults}>
-                            Use OpenRouter + Groq defaults
-                        </Button>
-                    </Box>
-                )}
-
-                {!focusedDemo && <UserSettingsPanel
+                <UserSettingsPanel
                     isCollapsed={collapseStates.userSettings}
                     setIsCollapsed={() => toggleCollapse("userSettings")}
                     userSettings={userSettings}
@@ -425,7 +380,7 @@ const Settings = () => {
                     templates={templates}
                     letterTemplates={letterTemplates}
                     toast={toast}
-                />}
+                />
 
                 <ModelSettingsPanel
                     isCollapsed={collapseStates.modelSettings}
@@ -447,7 +402,7 @@ const Settings = () => {
                     handleReEmbed={handleReEmbed}
                 />
 
-                {!focusedDemo && <PromptSettingsPanel
+                <PromptSettingsPanel
                     isCollapsed={collapseStates.promptSettings}
                     setIsCollapsed={() => toggleCollapse("promptSettings")}
                     prompts={prompts}
@@ -456,21 +411,21 @@ const Settings = () => {
                     options={options}
                     handleOptionChange={handleOptionChange}
                     config={config}
-                />}
+                />
 
-                {!focusedDemo && <TemplateSettingsPanel
+                <TemplateSettingsPanel
                     isCollapsed={collapseStates.templates}
                     setIsCollapsed={() => toggleCollapse("templates")}
                     templates={templates}
                     setTemplates={setTemplates}
-                />}
+                />
 
-                {!focusedDemo && <LetterTemplatesPanel
+                <LetterTemplatesPanel
                     isCollapsed={collapseStates.letterTemplates}
                     setIsCollapsed={() => toggleCollapse("letterTemplates")}
-                />}
+                />
 
-                {!focusedDemo && isChatEnabled() && (
+                {isChatEnabled() && (
                     <ChatSettingsPanel
                         isCollapsed={collapseStates.chatSettings}
                         setIsCollapsed={() => toggleCollapse("chatSettings")}

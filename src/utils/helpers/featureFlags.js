@@ -25,8 +25,8 @@ export const isPdfFormsEnabled = () => {
 };
 
 /**
- * Keep the hackathon build focused on the local scribe workflow.
- * Set VITE_HACKATHON_MODE=false to restore the full upstream navigation.
+ * Keep demo startup focused by skipping first-run setup screens.
+ * Product capabilities remain available in the demo interface.
  */
 export const isHackathonMode = () => {
   return import.meta.env.VITE_HACKATHON_MODE !== "false";
