@@ -302,6 +302,8 @@ def redact_download():
 @app.post("/api/secure/scan")
 def secure_scan(body: dict = Body(default={})):
     roots = body.get("roots")
+    if body.get("demo"):        # deterministic on-stage scan of the planted fixture
+        roots = [str(DEMO / "secrets-demo")]
     quality = body.get("quality", False)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
     res = p2.run_scan(roots, model, use_gemma=body.get("use_gemma", True))
