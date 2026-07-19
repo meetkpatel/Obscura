@@ -196,6 +196,7 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
       <h2>Secure this machine</h2>
       <p class="sub">A read-only, on-device scan for exposure — secrets in plaintext, weak configuration, risky ports. Gemma explains each finding. Nothing is changed without your click.</p>
       <button onclick="doScan()" id="scanBtn">Run scan</button>
+      <button onclick="doScan(true)" id="scanDemoBtn" class="ghost">Scan demo folder</button>
       <span class="rs" id="scanNote" style="margin-left:12px"></span>
       <div id="scanOut" class="hidden" style="margin-top:20px">
         <div class="row">
@@ -491,12 +492,13 @@ async function doRedact(){
 }
 
 /* ---------- SECURE ---------- */
-async function doScan(){
+async function doScan(demo){
+  const btn = demo? $('#scanDemoBtn') : $('#scanBtn');
   $('#scanOut').classList.remove('hidden');
-  $('#scanBtn').innerHTML='<span class="spin"></span> Scanning…';
+  btn.innerHTML='<span class="spin"></span> Scanning…';
   $('#findings').innerHTML='<div class="rs">collecting…</div>';
   try{
-    const r=await (await fetch('/api/secure/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:q()})})).json();
+    const r=await (await fetch('/api/secure/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:q(),demo:!!demo})})).json();
     $('#scoreVal').textContent=r.safety_score;
     $('#scoreVal').style.color = r.safety_score>=80?'#19c3a5':r.safety_score>=55?'#f2b544':'#ff5c6c';
     $('#scoreBreak').innerHTML = Object.entries(r.score_breakdown).map(([k,v])=>`<span class="pill">${k}: −${v}</span>`).join('')||'clean';
@@ -515,7 +517,7 @@ async function doScan(){
         ${f.remediation?`<div class="rs"><small class="k">Fix:</small> ${f.remediation} ${f.requires_admin?'<span class="pill">admin</span>':''} ${f.reversible?'<span class="pill">reversible</span>':''}</div>`:''}
       </div></div>`).join('') : '<div class="proofbox pass">✓ No exposure found.</div>';
   }catch(e){ $('#findings').innerHTML='scan failed: '+e; }
-  $('#scanBtn').textContent='Run scan';
+  btn.textContent = demo? 'Scan demo folder' : 'Run scan';
 }
 function sendToRedactor(path){ tab('redact'); toast('Loaded '+path+' into Redactor (demo: drop the file to redact it).'); }
 
