@@ -1,0 +1,66 @@
+# Use an official Python runtime as a parent image
+FROM python:3.12-slim
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Set the working directory inside the image
+WORKDIR /usr/src/app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create obscura user
+RUN useradd -m -u 1000 obscura
+
+# First copy dependency files to leverage Docker cache
+COPY server/pyproject.toml server/uv.lock /usr/src/app/server/
+
+# Install Python dependencies
+RUN uv pip install --system --no-cache /usr/src/app/server[docker] pytest pytest-asyncio pytest-cov
+
+# Then copy the rest of the application
+COPY server/ /usr/src/app/server/
+
+# Set environment variables
+ENV PYTHONPATH=/usr/src/app
+ENV TESTING=true
+ENV DB_ENCRYPTION_KEY=test_key_12345
+ENV DOCKER_CONTAINER=true
+
+# Create directories and set ownership
+RUN mkdir -p /usr/src/app/build /usr/src/app/data && \
+    echo "<html><body>Test</body></html>" > /usr/src/app/build/index.html && \
+    chown -R obscura:obscura /usr/src/app
+
+# Create the run_tests.sh script
+RUN echo '#!/bin/bash\n\
+# Delete test database if it exists\n\
+rm -f /usr/src/app/data/test_obscura_database.sqlite\n\
+\n\
+PYTHONPATH=/usr/src/app pytest \
+    --verbose \
+    --cov=server \
+    --cov-report=xml \
+    --cov-report=lcov \
+    --asyncio-mode=strict \
+    /usr/src/app/server/tests/\n\
+\n\
+test_exit_code=$?\n\
+\n\
+# Delete test database after tests\n\
+rm -f /usr/src/app/data/test_obscura_database.sqlite\n\
+\n\
+exit $test_exit_code' > /usr/src/app/run_tests.sh && \
+    chmod +x /usr/src/app/run_tests.sh
+
+# Change permissions
+RUN chown -R obscura:obscura /usr/src/app
+
+# Switch to obscura user
+USER obscura
+
+# Run tests using the script
+ENTRYPOINT ["/usr/src/app/run_tests.sh"]
+CMD ["/usr/src/app/run_tests.sh"]

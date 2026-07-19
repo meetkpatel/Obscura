@@ -1,0 +1,75 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run start-react",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:3000",
+    "frontendDist": "../build"
+  },
+  "productName": "Obscura",
+  "version": "2.0.0",
+  "identifier": "com.obscura.scribe",
+  "app": {
+    "windows": [
+      {
+        "title": "Obscura",
+        "width": 1200,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay"
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true,
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "server_dist"
+    ],
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
+    "macOS": {
+      "frameworks": [],
+      "entitlements": "entitlements.plist",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "providerShortName": null,
+      "hardenedRuntime": true
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "",
+    "longDescription": "",
+    "copyright": "",
+    "externalBin": [
+      "binaries/obscura-server",
+      "binaries/obscura-pm",
+      "binaries/obscura-llama-server",
+      "binaries/obscura-whisper-server"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

@@ -1,0 +1,93 @@
+[project]
+name = "obscura-server"
+version = "2.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "APScheduler==3.11.2",
+    "fastapi==0.128.0",
+    "httpx==0.28.1",
+    "json-repair==0.55.0",
+    "openai==2.14.0",
+    "platformdirs==4.5.1",
+    "pydantic==2.12.5",
+    "python-multipart==0.0.32",
+    "rapidfuzz==3.14.3",
+    "sqlcipher3==0.6.2",
+    "uvicorn[standard]==0.41.0",
+]
+
+[project.optional-dependencies]
+rag = [
+    "mcp==1.26.0",
+    "numpy==2.4.2",
+    "pypdf==6.13.2",
+    "sqlite-vec==0.1.9",
+    "tiktoken==0.12.0",
+]
+
+ocr = [
+    "obscura-server[rag]",
+    "Pillow==12.2.0",
+    "pytesseract==0.3.13",
+]
+docker = [
+    "obscura-server[rag,ocr]",
+]
+
+[dependency-groups]
+dev = [
+    "nuitka==4.0",
+    "pytest==9.0.3",
+    "pytest-asyncio==1.3.0",
+    "pytest-cov==7.0.0",
+    "ruff==0.15.4",
+    "bandit[toml]==1.9.4",
+    "pre-commit==4.5.1",
+    "ty==0.0.39",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.hatch.build.targets.wheel]
+packages = []
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "PTH", "SIM", "TCH"]
+ignore = ["E501", "B008", "UP007", "SIM108"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ty.environment]
+python = ".venv"
+extra-paths = [".."]
+
+[tool.ty.analysis]
+replace-imports-with-any = [
+    "sqlcipher3.**",
+    "tiktoken.**",
+    "pytesseract.**",
+    "pypdf.**",
+    "PIL.**",
+    "sqlite_vec.**",
+    "mcp.**",
+    "numpy.**",
+]
+
+[[tool.ty.overrides]]
+include = ["tests/**"]
+
+[tool.ty.overrides.rules]
+possibly-unresolved-reference = "warn"
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "dist"]
+
+[tool.uv]
+exclude-newer = "7 days"

@@ -1,0 +1,340 @@
+import React, {
+  useState,
+  useRef,
+  forwardRef,
+  useImperativeHandle,
+} from "react";
+import TextareaAutosize from "react-textarea-autosize";
+import {
+  Box,
+  Flex,
+  Text,
+  Collapse,
+  HStack,
+  Select,
+  VStack,
+  Tooltip,
+  Center,
+  Spinner,
+  useToast,
+  Badge,
+} from "@chakra-ui/react";
+import {
+  EditIcon,
+  CopyIcon,
+  CheckIcon,
+  AttachmentIcon,
+} from "../common/icons";
+import { FaSave, FaFileAlt, FaThumbtack, FaCheckDouble } from "react-icons/fa";
+import { GreenButton, GreyButton } from "../common/Buttons";
+import { useTemplateSelection } from "../../utils/templates/templateContext";
+import { patientApi } from "../../utils/api/patientApi";
+import ConfirmLeaveModal from "../modals/ConfirmLeaveModal";
+import { isHackathonMode } from "../../utils/helpers/featureFlags";
+
+const Summary = forwardRef(
+  (
+    {
+      isSummaryCollapsed,
+      toggleSummaryCollapse,
+      patient,
+      setPatient,
+      handleGenerateLetterClick,
+      handleSavePatientData,
+      setParentIsModified,
+      saveLoading,
+      onWrapUp,
+      wrapUpLoading,
+      setIsModified,
+      onCopy,
+      recentlyCopied,
+      isNewPatient,
+      selectTemplate,
+      isSearchedPatient,
+      isEncounterSaved = false,
+    },
+    ref,
+  ) => {
+    const {
+      currentTemplate,
+      templates,
+      status: templateStatus,
+    } = useTemplateSelection();
+
+    const textareasRefs = useRef({});
+    const [isTemplateChangeModalOpen, setIsTemplateChangeModalOpen] =
+      useState(false);
+    const [pendingTemplateKey, setPendingTemplateKey] = useState(null);
+    const toast = useToast();
+    const focusedDemo = isHackathonMode();
+
+    const handleTemplateChange = async (e) => {
+      const newTemplateKey = e.target.value;
+
+      if (!isNewPatient && !isSearchedPatient) {
+        toast({
+          title: "Template Locked",
+          description: "Template cannot be changed for historical encounters",
+          status: "warning",
+          duration: 3000,
+          isClosable: true,
+        });
+        return;
+      }
+
+      setPendingTemplateKey(newTemplateKey);
+      setIsTemplateChangeModalOpen(true);
+    };
+
+    const confirmTemplateChange = async () => {
+      console.log("confirmTemplateChange called", {
+        ur_number: patient?.ur_number,
+        pendingTemplateKey,
+      });
+
+      // If patient has a UR number, fetch persistent fields for the new template type
+      if (patient?.ur_number) {
+        try {
+          // Extract base template key (e.g., "soap" from "soap_01")
+          const baseTemplateKey = pendingTemplateKey.split("_")[0];
+          console.log("Fetching history for template:", baseTemplateKey);
+
+          const history = await patientApi.fetchPatientHistoryByTemplate(
+            patient.ur_number,
+            baseTemplateKey,
+          );
+
+          console.log("History result:", history);
+
+          if (history && history.length > 0) {
+            // Merge persistent fields from most recent note of this type
+            const mostRecent = history[0];
+            setPatient((prev) => ({
+              ...prev,
+              template_key: pendingTemplateKey,
+              template_data: {
+                ...mostRecent.template_data,
+              },
+            }));
+            setIsTemplateChangeModalOpen(false);
+            await selectTemplate(pendingTemplateKey);
+            return;
+          }
+        } catch (error) {
+          console.error("Error fetching history for template:", error);
+        }
+      }
+
+      // Fallback: just change template without pre-filling
+      console.log("Falling back to simple template change");
+      selectTemplate(pendingTemplateKey);
+      setIsTemplateChangeModalOpen(false);
+    };
+
+    const handleTemplateDataChange = (fieldKey, value) => {
+      setPatient((prev) => ({
+        ...prev,
+        template_data: {
+          ...prev.template_data,
+          [fieldKey]: value,
+        },
+      }));
+      setIsModified(true);
+    };
+
+    const renderField = (field) => {
+      const hasContent = patient.template_data?.[field.field_key]?.trim();
+      const persistentMarker = field.persistent ? (
+        <Tooltip
+          label="Persists between encounters."
+          hasArrow
+          placement="right"
+        >
+          <Box as="span" className="cohesive-persistent-marker">
+            <FaThumbtack />
+          </Box>
+        </Tooltip>
+      ) : null;
+
+      return (
+        <Box key={field.field_key} className="cohesive-field">
+          <Text className="cohesive-field-label">
+            {field.field_name}:{persistentMarker}
+          </Text>
+          <TextareaAutosize
+            placeholder="Enter text..."
+            value={patient.template_data?.[field.field_key] || ""}
+            onChange={(e) => {
+              handleTemplateDataChange(field.field_key, e.target.value);
+            }}
+            className="cohesive-textarea"
+            ref={(el) => (textareasRefs.current[field.field_key] = el)}
+          />
+        </Box>
+      );
+    };
+
+    useImperativeHandle(ref, () => ({
+      resizeTextarea: () => {
+        Object.values(textareasRefs.current).forEach((textarea) => {
+          if (textarea) {
+            textarea.style.height = "auto";
+            textarea.style.height = `${textarea.scrollHeight}px`;
+          }
+        });
+      },
+    }));
+
+    if (templateStatus === "loading") {
+      return (
+        <Box p="4" borderRadius="sm" className="panels-bg">
+          <Center mt={4}>
+            <Spinner size="sm" speed="0.65s" />
+            <Text ml={2}>Loading template...</Text>
+          </Center>
+        </Box>
+      );
+    }
+
+    return (
+      <>
+        <Box p={[2, 3, 4]} borderRadius="sm" className="panels-bg">
+          <Flex align="center" justify="space-between">
+            <Flex align="center">
+              <HStack spacing={3}>
+                <EditIcon size="1.2em" />
+                <Text as="h3">Note</Text>
+                <Badge colorScheme="orange" variant="subtle" px={2} py={1}>
+                  Unverified draft
+                </Badge>
+              </HStack>
+            </Flex>
+            <Tooltip
+              label={
+                isNewPatient
+                  ? "Select Template"
+                  : "Template cannot be changed for historical encounters"
+              }
+              aria-label="Template Selector Tooltip"
+            >
+              <Box>
+                <Flex alignItems="center">
+                  <FaFileAlt
+                    style={{ marginRight: "8px" }}
+                    className="pill-box-icons"
+                  />
+                  <Select
+                    placeholder="Select Template"
+                    value={
+                      currentTemplate?.template_key ||
+                      patient?.template_key ||
+                      ""
+                    }
+                    onChange={handleTemplateChange}
+                    size="sm"
+                    width={["100px", "150px", "200px"]}
+                    className="input-style"
+                    isDisabled={!isNewPatient}
+                  >
+                    {/* Show "Historical Template" only for viewing historical encounters */}
+                    {!isNewPatient &&
+                      !isSearchedPatient &&
+                      patient?.template_key &&
+                      !templates?.some(
+                        (t) => t.template_key === patient.template_key,
+                      ) && (
+                        <option value={patient.template_key}>
+                          Historical Template
+                        </option>
+                      )}
+
+                    {templates?.map((t) => (
+                      <option key={t.template_key} value={t.template_key}>
+                        {t.template_name}
+                      </option>
+                    ))}
+                  </Select>
+                </Flex>
+              </Box>
+            </Tooltip>
+          </Flex>
+
+          <Collapse in={!isSummaryCollapsed} animateOpacity>
+            <Box mt="4" className="cohesive-fields-container">
+              <VStack spacing="0" align="stretch">
+                {currentTemplate?.fields?.map(renderField)}
+              </VStack>
+            </Box>
+            <Flex mt="4" justifyContent="space-between">
+              {!focusedDemo && <Flex>
+                <Tooltip
+                  label={
+                    isEncounterSaved
+                      ? ""
+                      : "Save the encounter first to generate a letter"
+                  }
+                  placement="top"
+                >
+                  <Box>
+                    <GreyButton
+                      onClick={() => handleGenerateLetterClick(null)}
+                      leftIcon={<EditIcon />}
+                      mr="2"
+                      isDisabled={saveLoading || !isEncounterSaved}
+                    >
+                      Generate Letter
+                    </GreyButton>
+                  </Box>
+                </Tooltip>
+              </Flex>}
+              <Flex>
+                <GreyButton
+                  onClick={onCopy}
+                  width="190px"
+                  leftIcon={recentlyCopied ? <CheckIcon /> : <CopyIcon />}
+                  mr="2"
+                >
+                  {recentlyCopied ? "Copied!" : "Copy to Clipboard"}
+                </GreyButton>
+                <GreyButton
+                  onClick={handleSavePatientData}
+                  isLoading={saveLoading}
+                  loadingText="Saving"
+                  width="190px"
+                  leftIcon={saveLoading ? null : <FaSave />}
+                >
+                  {saveLoading ? "Saving..." : "Save Encounter"}
+                </GreyButton>
+                {!focusedDemo && <Tooltip
+                  label="Review AI-extracted jobs, then finish and move to a new note"
+                  placement="top"
+                >
+                  <Box>
+                    <GreenButton
+                      onClick={onWrapUp}
+                      isLoading={wrapUpLoading}
+                      loadingText="Wrapping"
+                      width="150px"
+                      ml="2"
+                      leftIcon={wrapUpLoading ? null : <FaCheckDouble />}
+                      isDisabled={saveLoading}
+                    >
+                      {wrapUpLoading ? "Wrapping..." : "Wrap Up"}
+                    </GreenButton>
+                  </Box>
+                </Tooltip>}
+              </Flex>
+            </Flex>
+          </Collapse>
+        </Box>
+        <ConfirmLeaveModal
+          isOpen={isTemplateChangeModalOpen}
+          onClose={() => setIsTemplateChangeModalOpen(false)}
+          confirmNavigation={confirmTemplateChange}
+        />
+      </>
+    );
+  },
+);
+
+export default Summary;
