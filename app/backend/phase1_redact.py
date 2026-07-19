@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import re
 import json
+import difflib
 import subprocess
 import tempfile
 from pathlib import Path
@@ -82,17 +83,23 @@ REGEX_RULES: list[tuple[str, str, str]] = [
     # (category, label, pattern)
     ("gov_id", "SSN", r"\b\d{3}-\d{2}-\d{4}\b"),
     ("gov_id", "EIN/Tax ID", r"\b\d{2}-\d{7}\b"),
-    ("gov_id", "bar/license no.", r"\b(?:VSB|Bar|License|Lic)\s*#?\s*\d{3,7}\b"),
+    ("gov_id", "bar/license no.", r"\b(?:VSB|Bar|License|Lic)\s*#?\s*(\d{3,7})\b"),
     ("contact", "email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ("contact", "phone", r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
     ("address", "P.O. Box", r"\bP\.?\s*O\.?\s*Box\s+\d+\b"),
+    # Street address — number + street name + street-type suffix (+ optional unit).
+    # Suffix-anchored so it's high precision. Presidio NER only catches the CITY;
+    # this catches the street line that would otherwise survive without Gemma.
+    ("address", "street address", r"\b\d{1,6}\s+(?:[A-Z][A-Za-z0-9.'-]+\s+){0,4}(?i:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Terrace|Ter|Place|Pl|Circle|Cir|Highway|Hwy|Parkway|Pkwy|Trail|Trl|Square|Sq|Loop|Row|Pike)\b\.?(?:\s*,?\s*(?:Apt|Suite|Ste|Unit|Bldg|Fl|Floor|Rm|Room|#)\s*\.?\s*[A-Za-z0-9-]+)?"),
     ("date", "date", r"\b(?:0?[1-9]|1[0-2])[/\-.](?:0?[1-9]|[12]\d|3[01])[/\-.](?:19|20)\d{2}\b"),
     ("date", "written date", r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(?:19|20)\d{2}\b"),
     ("financial", "credit card", r"\b(?:\d[ -]?){13,16}\b"),
-    ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*\d{4,}\b"),
+    ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*(\d{4,})\b"),
     # --- HIPAA Safe Harbor healthcare identifiers (45 CFR 164.514(b)(2)) ---
-    ("medical", "medical record no.", r"\b(?:MRN|Medical\s*Record(?:\s*(?:No|Number|#))?)\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
-    ("medical", "health plan/member ID", r"\b(?:Member|Beneficiary|Subscriber|Policy|Group|Plan|Insurance)\s*(?:ID|No|Number|#)\.?\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
+    # NOTE: the label anchors the match but is captured in group(1) so only the
+    # VALUE is boxed — the "MRN"/"Member ID" label stays visible.
+    ("medical", "medical record no.", r"\b(?:MRN|Medical\s*Record(?:\s*(?:No|Number|#))?)\s*[:#]?\s*([A-Z0-9-]{4,})\b"),
+    ("medical", "health plan/member ID", r"\b(?:Member|Beneficiary|Subscriber|Policy|Group|Plan|Insurance)\s*(?:ID|No|Number|#)\.?\s*[:#]?\s*([A-Z0-9-]{4,})\b"),
     ("other", "URL", r"\bhttps?://[^\s]+|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ("other", "VIN", r"\b[A-HJ-NPR-Z0-9]{17}\b"),
     ("other", "IP address", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
@@ -147,10 +154,13 @@ def regex_hits(text: str) -> list[dict]:
     hits = []
     for cat, label, pat in REGEX_RULES:
         for m in re.finditer(pat, text):
-            s = m.group(0)
-            if label == "credit card" and not _luhn(s):
+            full = m.group(0)
+            if label == "credit card" and not _luhn(full):
                 continue
-            hits.append({"category": cat, "label": label, "text": s.strip()})
+            # If the rule captured a value group, box ONLY that (the label stays
+            # visible); otherwise box the whole match.
+            value = (m.group(1) if m.groups() else full) or full
+            hits.append({"category": cat, "label": label, "text": value.strip()})
     return hits
 
 
@@ -213,8 +223,10 @@ def _emit_line_boxes(matched: list[dict], hit: dict, pad_frac: float) -> list[Bo
 def _box_from_words(ws: list[dict], hit: dict, pad_frac: float) -> Box:
     x1 = min(w["x1"] for w in ws); y1 = min(w["y1"] for w in ws)
     x2 = max(w["x2"] for w in ws); y2 = max(w["y2"] for w in ws)
-    padx = int((x2 - x1) * pad_frac) + 2
-    pady = int((y2 - y1) * pad_frac) + 2
+    # Pad to fully cover the glyphs, but CAP it — a proportional pad on a wide
+    # value (long URL) would otherwise bleed onto the neighbouring label.
+    padx = min(int((x2 - x1) * pad_frac) + 2, 10)
+    pady = min(int((y2 - y1) * pad_frac) + 2, 10)
     return Box(x1=x1 - padx, y1=y1 - pady, x2=x2 + padx, y2=y2 + pady,
               category=hit["category"], label=hit["label"], text=hit["text"],
               confidence=0.98, source="ocr_grounded",
@@ -251,30 +263,125 @@ def _denied(hit: dict) -> bool:
     return False
 
 
-def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06) -> list[Box]:
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", "", s).lower()
+
+
+# Fuzzy fallback acceptance floor. A Gemma-returned string or a hit that crosses
+# an OCR misread ("Srnith" for "Smith", "J0hn" for "John") won't match verbatim;
+# 0.82 is high enough to avoid grabbing an unrelated run but low enough to absorb
+# a handful of character-level OCR confusions in a name/address-length span.
+_FUZZY_FLOOR = 0.82
+
+
+def _trim_to_target(matched: list[dict], target: str) -> list[dict]:
+    """Drop leading/trailing OCR words that fall OUTSIDE the matched target span.
+
+    Grounding accumulates words from the start of a line, so the value box would
+    otherwise swallow a preceding field label ("Phone: (559)..." -> box over
+    "Phone:" too). Keep only the words whose characters overlap the target span.
+    Safe no-op for a fuzzy match, where the target is not present verbatim.
+    """
+    norm = [_norm(w["text"]) for w in matched]
+    pos = "".join(norm).find(target)
+    if pos < 0:
+        return matched
+    start, end = pos, pos + len(target)
+    out, cursor = [], 0
+    for w, n in zip(matched, norm):
+        w0, w1 = cursor, cursor + len(n)
+        cursor = w1
+        if w1 > start and w0 < end:            # word overlaps [start, end)
+            out.append(w)
+    return out or matched
+
+
+def _ground_exact(hit: dict, target: str, words: list[dict], norm_words: list[str],
+                  claimed: set, boxes: list[Box], pad_frac: float) -> bool:
+    """Verbatim (whitespace-insensitive) grounding -- the fast, precise path.
+    Emits a box for EVERY occurrence. Returns True if it placed at least one."""
+    placed = False
+    n = len(words)
+    for i in range(n):
+        acc, matched = "", []
+        for j in range(i, min(i + 16, n)):   # allow long spans (addresses)
+            acc += norm_words[j]
+            matched.append(words[j])
+            if target in acc:
+                if (hit["text"], i) not in claimed:
+                    claimed.add((hit["text"], i))
+                    # trim leading/trailing label words so only the value is boxed
+                    boxes.extend(_emit_line_boxes(_trim_to_target(matched, target), hit, pad_frac))
+                    placed = True
+                break
+            if len(acc) > len(target) + 6:
+                break
+    return placed
+
+
+def _ground_fuzzy(hit: dict, target: str, words: list[dict], norm_words: list[str],
+                  claimed: set, boxes: list[Box], pad_frac: float) -> bool:
+    """OCR-tolerant fallback for hits the exact pass couldn't place (Gemma
+    paraphrase, character misreads). Scans word runs of ~target length and keeps
+    the single best-matching window above the similarity floor. Boxes it emits
+    are marked lower-confidence with a [fuzzy] note so the reviewer sees why."""
+    best = None   # (ratio, start_index, matched_words)
+    n = len(words)
+    tlen = len(target)
+    for i in range(n):
+        acc, matched = "", []
+        for j in range(i, min(i + 16, n)):
+            acc += norm_words[j]
+            matched.append(words[j])
+            if len(acc) >= tlen * 0.7:
+                r = difflib.SequenceMatcher(None, acc, target).ratio()
+                if best is None or r > best[0]:
+                    best = (r, i, list(matched))
+            if len(acc) > tlen + 8:
+                break
+    if not best or best[0] < _FUZZY_FLOOR:
+        return False
+    ratio, i, matched = best
+    if (hit["text"], i) in claimed:
+        return True
+    claimed.add((hit["text"], i))
+    start = len(boxes)
+    # trim is a safe no-op when the target is not present verbatim (fuzzy case)
+    boxes.extend(_emit_line_boxes(_trim_to_target(matched, target), hit, pad_frac))
+    for b in boxes[start:]:
+        b.confidence = 0.80
+        b.reason = (b.reason or "").rstrip() + f" [fuzzy OCR match {ratio:.0%}]"
+    return True
+
+
+def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06,
+                      ungrounded: list[dict] | None = None) -> list[Box]:
     """Map each hit string to exact OCR word boxes. Handles multi-line spans
     (wrapped addresses) by emitting one box per line segment. No grid drift.
-    Non-PII terms (legal roles, generic nouns) are dropped to curb over-boxing."""
+    Leading/trailing label words are trimmed so only the value is boxed.
+
+    Tries verbatim grounding first; if a hit can't be placed that way, falls
+    back to an OCR-tolerant fuzzy match. Any hit that STILL can't be located is
+    appended to `ungrounded` (when provided) so the caller can surface it -- a
+    detected-but-unplaceable item is a silent miss otherwise, which for a
+    recall-biased redactor is the most dangerous failure mode.
+
+    Non-PII terms (legal roles, generic nouns) are dropped up front to curb
+    over-boxing."""
     boxes: list[Box] = []
     claimed: set[tuple[str, int]] = set()
+    norm_words = [_norm(w["text"]) for w in words]
     for hit in hits:
         if _denied(hit):
             continue
-        target = re.sub(r"\s+", "", hit["text"]).lower()
+        target = _norm(hit["text"])
         if len(target) < 2:
             continue
-        for i in range(len(words)):
-            acc, matched = "", []
-            for j in range(i, min(i + 16, len(words))):   # allow long spans (addresses)
-                acc += re.sub(r"\s+", "", words[j]["text"]).lower()
-                matched.append(words[j])
-                if target in acc:
-                    if (hit["text"], i) not in claimed:
-                        claimed.add((hit["text"], i))
-                        boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
-                    break
-                if len(acc) > len(target) + 6:
-                    break
+        placed = _ground_exact(hit, target, words, norm_words, claimed, boxes, pad_frac)
+        if not placed:
+            placed = _ground_fuzzy(hit, target, words, norm_words, claimed, boxes, pad_frac)
+        if not placed and ungrounded is not None:
+            ungrounded.append(hit)
     return boxes
 
 
@@ -325,27 +432,30 @@ TEXT_ENTITY_PROMPT = (
 # unless they're part of a re-identifying phrase Presidio would miss.
 QUASI_ID_PROMPT = (
     "You are a records/FOIA redaction officer doing a SECOND pass. A deterministic "
-    "engine has already flagged the obvious identifiers (names, addresses, emails, "
-    "phones, SSNs, account and ID numbers, dates). Your job is the subtle layer it "
-    "cannot reason about: QUASI-IDENTIFIERS and re-identifying context — phrases "
-    "that, in combination, could single out a specific person even with the obvious "
-    "identifiers removed.\n"
+    "engine has already flagged the obvious identifiers (names, emails, phones, "
+    "SSNs, account and ID numbers, dates, and the CITY of an address). Your job is "
+    "two things it cannot reason about:\n"
+    "1. COMPLETE STREET ADDRESSES — the upstream engine only catches the city/ZIP, "
+    "so return each full mailing address as ONE span (number + street + unit + city "
+    "+ state + ZIP, e.g. '415 Oak Street, Apt 3, Fresno, CA 93706').\n"
+    "2. QUASI-IDENTIFIERS and re-identifying context — phrases that, in combination, "
+    "could single out a specific person even with the obvious identifiers removed. "
     "Examples: a unique job title tied to a place ('the only female fire captain in "
-    "Dubuque'); a distinctive medical condition or diagnosis; a rare event, case, or "
-    "docket description; a relationship that pins an identity ('the plaintiff's "
-    "twin brother'); an unusual physical description; a non-standard internal ID, "
-    "badge, or reference number the rules missed.\n"
-    "Do NOT re-list plain names, addresses, emails, phones, or standard ID numbers — "
-    "those are already handled. Only return spans that add re-identification risk.\n"
+    "Dubuque'); a distinctive medical condition; a rare case/docket description; a "
+    "relationship that pins an identity ('the plaintiff's twin brother'); a "
+    "non-standard internal ID or badge number the rules missed.\n"
+    "Do NOT re-list plain names, emails, phones, or standard ID numbers — those are "
+    "already handled. Return full addresses plus anything that adds re-identification risk.\n"
     "Copy each 'text' value EXACTLY (verbatim substring) so it can be located.\n"
     "Return ONLY JSON: {\"items\":[{\"text\":\"verbatim substring\",\"category\":"
-    "\"person|medical|gov_id|financial|other\",\"reason\":\"why it re-identifies\"}]}."
+    "\"address|person|medical|gov_id|financial|other\",\"reason\":\"why it re-identifies\"}]}."
     " If none, {\"items\":[]}.\n\nDOCUMENT:\n"
 )
 
 
 def gemma_text_entities(full_text: str, words: list[dict], model: str,
-                        presidio_on: bool = False) -> list[Box]:
+                        presidio_on: bool = False,
+                        ungrounded: list[dict] | None = None) -> list[Box]:
     """Ask Gemma for sensitive STRINGS, then OCR-ground each to exact pixel boxes.
     When Presidio ran (`presidio_on`), Gemma is narrowed to quasi-identifier /
     re-identification context; otherwise it does the full broad sweep so nothing
@@ -366,13 +476,16 @@ def gemma_text_entities(full_text: str, words: list[dict], model: str,
             cat = coerce_category(it.get("category", "other"))
             hits.append({"category": cat, "label": cat,
                          "text": t, "reason": it.get("reason", "")})
-    grounded = ground_text_boxes(hits, words)
-    # carry the model's reason onto the grounded box + mark provenance
+    grounded = ground_text_boxes(hits, words, ungrounded=ungrounded)
+    # carry the model's reason onto the grounded box + mark provenance. Leave
+    # fuzzy-grounded boxes' confidence/reason as-is so the [fuzzy] note survives.
     for b in grounded:
         b.source = "ocr_grounded"
-        b.confidence = 0.85
+        fuzzy = "[fuzzy" in (b.reason or "")
+        if not fuzzy:
+            b.confidence = 0.85
         for h in hits:
-            if h["text"] == b.text and h.get("reason"):
+            if h["text"] == b.text and h.get("reason") and not fuzzy:
                 b.reason = h["reason"]
     return grounded
 
@@ -468,9 +581,11 @@ def detect_page(img: Image.Image, model: str, use_vision=True,
     presidio_on = presidio_detect.available()
     presidio = presidio_detect.presidio_hits(full_text) if presidio_on else []
     hits = regex + presidio                         # structured PII + named entities
-    boxes = ground_text_boxes(hits, words)          # OCR-ground every hit to pixels
+    ungrounded: list[dict] = []                     # detected but couldn't be placed
+    boxes = ground_text_boxes(hits, words, ungrounded=ungrounded)  # OCR-ground to pixels
     if use_gemma_text:                              # quasi-identifier / re-id context
-        boxes += gemma_text_entities(full_text, words, model, presidio_on=presidio_on)
+        boxes += gemma_text_entities(full_text, words, model,
+                                     presidio_on=presidio_on, ungrounded=ungrounded)
     # Vision is for signatures/faces. Skip it on text-dense pages (signatures are
     # rare there and it's the slow part) — keeps the 12B path responsive.
     if use_vision and len(full_text) < 800:
@@ -481,10 +596,15 @@ def detect_page(img: Image.Image, model: str, use_vision=True,
     for b in boxes:
         b.x1, b.y1 = max(0, b.x1), max(0, b.y1)
         b.x2, b.y2 = min(W, b.x2), min(H, b.y2)
+    # Surface anything detected but not placeable — for a recall-biased tool a
+    # silent drop is worse than a visible "check this manually" warning.
+    ungrounded_texts = sorted({h["text"] for h in ungrounded})
     return DetectResult(
         page_width=W, page_height=H, boxes=boxes, full_text=full_text,
         stats={"regex_hits": len(regex), "presidio_hits": len(presidio),
-               "presidio": presidio_on, "words": len(words), "boxes": len(boxes)},
+               "presidio": presidio_on, "words": len(words), "boxes": len(boxes),
+               "ungrounded_count": len(ungrounded_texts),
+               "ungrounded": ungrounded_texts[:20]},
     )
 
 

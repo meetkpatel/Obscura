@@ -25,6 +25,7 @@ app/
   backend/
     contracts.py       # frozen Pydantic vocabulary shared by all phases
     gemma.py           # single Ollama gateway: queue + structured JSON + retries
+    presidio_detect.py # deterministic Scan layer: Presidio analyzer + spaCy NER (on-device)
     phase1_redact.py   # ingest → hybrid detect → OCR-grounded boxes → burn/flatten/scrub → verify
     phase2_secure.py   # deterministic collectors → FixRegistry → Gemma explainer → Safety Score
     phase3_organize.py # inventory → Gemma classify → propose → crash-safe journal → undo
@@ -35,32 +36,89 @@ app/
   make_demo_data.py
 ```
 
-**Detection design (the important bit):** structured PII (SSN, card, email, phone) comes from **deterministic regex + Luhn** — perfect precision, instant. Names, addresses, and re-identifying context come from a **Gemma text pass** whose output strings are then **located with Tesseract OCR word boxes** — so the *model finds the string* but *OCR fixes the pixels*. Model bounding-box coordinates are used only for genuinely visual items (signatures, faces), where a slightly loose box is fine. This kills the "characters peeking out from under the box" failure mode that coordinate-only tools suffer.
+**Detection design (the important bit):** this is the **Scan (deterministic) → Understand (Gemma)** spine. The Scan layer is **Microsoft Presidio** running fully on-device — validated recognizers (SSN, credit card + Luhn, IBAN, passport, MRN, …) plus **spaCy NER** for names / locations / organizations — augmented by Obscura's own regex floor for healthcare identifiers. Gemma then does the one job an LLM wins at: **quasi-identifier / re-identification** reasoning over the text. Every detected string is **located with Tesseract OCR word boxes** — the *engine finds the string*, *OCR fixes the pixels*, and only the value is boxed (field labels like `Phone:` stay visible). Model bounding-box coordinates are used only for genuinely visual items (signatures, faces). This kills the "characters peeking out from under the box" failure mode that coordinate-only tools suffer. If Presidio isn't installed, detection falls back to regex + Gemma automatically.
 
 **True redaction:** boxes are drawn onto the rasterized page, the page is re-encoded through raw pixels (no layers), exported as an image-only PDF, and its metadata dictionary is cleared. **Verify** re-opens the output, asserts there is no selectable text layer, and OCRs the rendered pages to confirm none of the redacted strings survive.
 
-## Requirements
+## Setup
 
-- **Ollama ≥ 0.22** with two models pulled:
-  ```
-  ollama pull gemma4:e4b-it-qat     # interactive default (~38 tok/s on an 8GB GPU)
-  ollama pull gemma4:12b-it-qat     # quality mode for dense docs (~14 tok/s)
-  ```
-- **Tesseract OCR** on PATH (coordinate grounding for REDACT).
-- Python 3.11+ and `pip install -r app/requirements.txt`.
+### Prerequisites
 
-> Benchmarked on an RTX 4070 laptop (8 GB VRAM): the 12B QAT model fits in VRAM but generates ~14 tok/s; **E4B is the interactive default**. Both models + the Ollama installer belong on a USB stick for the venue — don't trust conference Wi-Fi.
+| Tool | Why | Install |
+|---|---|---|
+| **Python 3.11+** | backend runtime | [python.org](https://www.python.org/downloads/) |
+| **Tesseract OCR** | pixel-exact coordinate grounding for REDACT | macOS: `brew install tesseract` · Ubuntu: `sudo apt install tesseract-ocr` · Windows: [UB-Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki) |
+| **Ollama ≥ 0.22** | runs Gemma 4 locally | [ollama.com/download](https://ollama.com/download) |
+
+### 1. Clone
+
+```bash
+git clone https://github.com/meetkpatel/Obscura.git
+cd Obscura
+```
+
+### 2. Python environment + dependencies
+
+Use a virtual environment so the install is isolated:
+
+```bash
+python3 -m venv app/.venv
+source app/.venv/bin/activate          # Windows: app\.venv\Scripts\activate
+pip install -r app/requirements.txt
+```
+
+### 3. Download the spaCy NER model (one-time, ~590 MB)
+
+Presidio's named-entity recognition needs this model. It caches locally, so it
+works offline afterward:
+
+```bash
+python -m spacy download en_core_web_lg
+```
+
+> If you skip Presidio/spaCy entirely, the app still runs — REDACT falls back to
+> its regex + Gemma passes automatically.
+
+### 4. Pull a Gemma 4 model in Ollama
+
+```bash
+ollama pull gemma4:e4b-it-qat     # interactive default (~38 tok/s on an 8 GB GPU)
+ollama pull gemma4:12b-it-qat     # quality mode for dense docs (~14 tok/s)
+```
+
+The app expects these exact tags. If the header shows **`MODEL MISSING`**, the
+pulled tag name doesn't match — either pull the tags above, or edit
+`FAST_MODEL` / `QUALITY_MODEL` in [`app/backend/gemma.py`](app/backend/gemma.py)
+to a Gemma model you already have (`ollama list` shows them). REDACT still detects
+via Presidio + regex without Gemma; Gemma adds the quasi-identifier and vision passes.
+
+> Benchmarked on an RTX 4070 laptop (8 GB VRAM): the 12B QAT model fits in VRAM
+> but generates ~14 tok/s; **E4B is the interactive default**. Both models + the
+> Ollama installer belong on a USB stick for the venue — don't trust conference Wi-Fi.
 
 ## Run
 
-```
-python app/make_demo_data.py                      # synthetic demo assets
+```bash
+source app/.venv/bin/activate          # if not already active
+python app/make_demo_data.py           # generate synthetic demo assets (first run only)
+
 cd app/backend
 python -m uvicorn main:app --port 8000
-# open http://localhost:8000  (sign in — mock auth, any credentials)
 ```
 
-Turn Wi-Fi off first. Everything still works — click the on-device badge to see the egress proof (external connections: 0).
+Then open **http://localhost:8000** (sign in — mock auth, any credentials).
+
+Turn Wi-Fi off first. Everything still works — click the on-device badge to see the
+egress proof (external connections: 0).
+
+### Troubleshooting
+
+- **`MODEL MISSING` badge** — the pulled Ollama tag doesn't match what the app asks
+  for (see step 4).
+- **No boxes / "deterministic only"** — Ollama isn't running (`ollama serve`) or the
+  model isn't pulled; detection falls back to Presidio + regex.
+- **Nothing detected on a scan/photo** — check `tesseract --version` resolves on PATH.
+- **Port 8000 in use** — run with `--port 8010` (or any free port) and open that.
 
 ## Safety & scope
 
