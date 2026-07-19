@@ -327,6 +327,12 @@ async function loadSample(url){
 async function onFile(f){
   if(!f) return;
   $('#redactWork').classList.remove('hidden');
+  // NEW document — drop everything cached from the previous one so it can't show through.
+  stopScan();
+  for(const k in imgCache) delete imgCache[k];   // page images are keyed by index
+  PAGES=[]; DETECTED=[]; CUR=0;
+  const proof=$('#proof'); if(proof) proof.innerHTML='';   // clear old verification/download
+  const pager=$('#pager'); if(pager) pager.innerHTML='';
   $('#items').innerHTML='<div class="rs"><span class="spin"></span> Rendering pages…</div>';
   const fd=new FormData(); fd.append('file',f);
   try{
@@ -377,7 +383,8 @@ async function animateBoxesIn(i){
   const boxes=PAGES[i].boxes||[];
   $('#cvWrap').classList.add('scanning'); $('#hud').classList.remove('hidden'); $('#hudText').textContent='DETECTED';
   for(let n=1;n<=boxes.length;n++){
-    if(CUR!==i) return;
+    // Navigated away mid-animation — clean up the overlay so it isn't left stuck.
+    if(CUR!==i){ $('#cvWrap').classList.remove('scanning'); $('#hud').classList.add('hidden'); return; }
     ctx.drawImage(im,0,0);
     for(let k=0;k<n;k++) drawBox(ctx,boxes[k],k===n-1);
     $('#hudCount').textContent=n+(n===1?' item':' items');
@@ -386,32 +393,66 @@ async function animateBoxesIn(i){
   setTimeout(()=>{ $('#cvWrap').classList.remove('scanning'); $('#hud').classList.add('hidden'); if(CUR===i) renderImage(i); }, 450);
 }
 
+// Fetch + store one page's detections. No animation, no dependence on CUR — safe
+// to call for any page (used by both the interactive path and "Detect all pages").
+async function fetchDetect(i){
+  if(DETECTED[i]) return true;
+  try{
+    const r=await jfetch('/api/redact/detect_page',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({index:i, quality:q()})});
+    if(r.error) return false;
+    PAGES[i].boxes=r.boxes; DETECTED[i]=true;
+    if(r.note) toast('Page '+(i+1)+': '+r.note);
+    return true;
+  }catch(e){ return false; }
+}
+
 async function detectPage(i){
   if(DETECTED[i]){ stopScan(); renderImage(i); renderItems(i); return; }
   $('#items').innerHTML=`<div class="rs"><span class="spin"></span> ${q()?'Gemma 12B':'Gemma 4'} reading page ${i+1}… (one page at a time${q()?'; 12B is slower':''})</div>`;
   await startScan(i);
-  try{
-    const r=await jfetch('/api/redact/detect_page',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({index:i, quality:q()})});
-    stopScan();
-    if(r.error){ renderImage(i); $('#items').innerHTML='<div class="proofbox">⚠ '+r.error+'</div>'; return; }
-    PAGES[i].boxes=r.boxes; DETECTED[i]=true;
-    if(r.note) toast('Page '+(i+1)+': '+r.note);
-    if(CUR===i){ renderItems(i); animateBoxesIn(i); }
-  }catch(e){ stopScan(); renderImage(i); $('#items').innerHTML='<div class="proofbox">⚠ Detection failed: '+e.message+'</div>'; }
+  const ok=await fetchDetect(i);
+  stopScan();
+  if(CUR!==i) return;                          // user navigated away while detecting
+  if(ok){ renderItems(i); animateBoxesIn(i); }
+  else { renderImage(i); $('#items').innerHTML='<div class="proofbox">⚠ Detection failed on page '+(i+1)+'.</div>'; }
 }
 
 function renderPager(n){
+  // Insert the pager ABOVE the canvas wrapper — not inside it — so the absolutely
+  // positioned #hud badge can't cover the ‹ Prev button and page counter.
   let p=$('#pager'); if(!p){ p=document.createElement('div'); p.id='pager'; p.className='flex'; p.style.margin='10px 0';
-    $('#cv').parentElement.insertBefore(p,$('#cv')); }
+    const wrap=$('#cvWrap'); wrap.parentElement.insertBefore(p, wrap); }
   if(n<=1){ p.innerHTML=''; return; }
   p.innerHTML=`<button class="ghost" onclick="pg(-1)">‹ Prev</button>
     <span class="rs">Page <b id="pgn">${CUR+1}</b> of ${n}</span>
     <button class="ghost" onclick="pg(1)">Next ›</button>
     <button class="ghost" onclick="detectAll()" title="Detect every page now">Detect all pages</button>`;
 }
+// Total sensitive items found across every detected page in the file.
+function totalDetected(){ return PAGES.reduce((s,p)=>s+((p.boxes||[]).length),0); }
+function allDetected(){ return PAGES.length>0 && DETECTED.every(Boolean); }
 function pg(d){ CUR=Math.max(0,Math.min(PAGES.length-1,CUR+d)); const e=$('#pgn'); if(e) e.textContent=CUR+1; detectPage(CUR); }
-async function detectAll(){ for(let i=0;i<PAGES.length;i++){ if(!DETECTED[i]){ CUR=i; const e=$('#pgn'); if(e) e.textContent=i+1; await detectPage(i);} } toast('All pages detected.'); }
+async function detectAll(){
+  // Walk through every page: flip to it, detect if needed, show its boxes, hold
+  // briefly so the flip is visible. Ends on the last page; Prev/Next works after
+  // because every page is detected. renderImage (not fire-and-forget animation)
+  // keeps the flipping clean — no racing overlays.
+  for(let i=0;i<PAGES.length;i++){
+    CUR=i;
+    const e=$('#pgn'); if(e) e.textContent=i+1;
+    if(!DETECTED[i]){
+      $('#items').innerHTML=`<div class="rs"><span class="spin"></span> reading page ${i+1} of ${PAGES.length}…</div>`;
+      await startScan(i);
+      await fetchDetect(i);
+      stopScan();
+    }
+    await renderImage(i); renderItems(i);
+    await new Promise(r=>setTimeout(r, 200));   // brief hold so the page flip is visible
+  }
+  renderItems(CUR);   // refresh the count to show the file-wide total
+  toast('Detected '+totalDetected()+' items across '+PAGES.length+' pages.');
+}
 
 async function renderImage(i){
   const cv=$('#cv'), ctx=cv.getContext('2d'); const im=await loadImg(i);
@@ -431,7 +472,10 @@ function drawBox(ctx,b,glow){
 function renderItems(i){
   const p=PAGES[i]; const items=$('#items'); items.innerHTML='';
   const boxes=p.boxes||[];
-  $('#detCount').textContent = boxes.length+' items';
+  // Show the file-wide total once every page is detected; per-page otherwise.
+  $('#detCount').textContent = (PAGES.length>1 && allDetected())
+    ? `${boxes.length} on this page · ${totalDetected()} total in file`
+    : `${boxes.length} items`;
   if(!boxes.length){ items.innerHTML='<div class="proofbox pass">✓ No sensitive items detected on this page.</div>'; return; }
   boxes.forEach((b,bi)=>{
     const d=document.createElement('div'); d.className='item';

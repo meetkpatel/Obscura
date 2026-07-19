@@ -83,17 +83,23 @@ REGEX_RULES: list[tuple[str, str, str]] = [
     # (category, label, pattern)
     ("gov_id", "SSN", r"\b\d{3}-\d{2}-\d{4}\b"),
     ("gov_id", "EIN/Tax ID", r"\b\d{2}-\d{7}\b"),
-    ("gov_id", "bar/license no.", r"\b(?:VSB|Bar|License|Lic)\s*#?\s*\d{3,7}\b"),
+    ("gov_id", "bar/license no.", r"\b(?:VSB|Bar|License|Lic)\s*#?\s*(\d{3,7})\b"),
     ("contact", "email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ("contact", "phone", r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
     ("address", "P.O. Box", r"\bP\.?\s*O\.?\s*Box\s+\d+\b"),
+    # Street address — number + street name + street-type suffix (+ optional unit).
+    # Suffix-anchored so it's high precision. Presidio NER only catches the CITY;
+    # this catches the street line that would otherwise survive without Gemma.
+    ("address", "street address", r"\b\d{1,6}\s+(?:[A-Z][A-Za-z0-9.'-]+\s+){0,4}(?i:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Court|Ct|Way|Terrace|Ter|Place|Pl|Circle|Cir|Highway|Hwy|Parkway|Pkwy|Trail|Trl|Square|Sq|Loop|Row|Pike)\b\.?(?:\s*,?\s*(?:Apt|Suite|Ste|Unit|Bldg|Fl|Floor|Rm|Room|#)\s*\.?\s*[A-Za-z0-9-]+)?"),
     ("date", "date", r"\b(?:0?[1-9]|1[0-2])[/\-.](?:0?[1-9]|[12]\d|3[01])[/\-.](?:19|20)\d{2}\b"),
     ("date", "written date", r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(?:19|20)\d{2}\b"),
     ("financial", "credit card", r"\b(?:\d[ -]?){13,16}\b"),
-    ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*\d{4,}\b"),
+    ("financial", "account no.", r"\b(?:Account|Acct|Loan|Policy|Deed|Instrument|PRN)\s*#?\.?\s*(\d{4,})\b"),
     # --- HIPAA Safe Harbor healthcare identifiers (45 CFR 164.514(b)(2)) ---
-    ("medical", "medical record no.", r"\b(?:MRN|Medical\s*Record(?:\s*(?:No|Number|#))?)\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
-    ("medical", "health plan/member ID", r"\b(?:Member|Beneficiary|Subscriber|Policy|Group|Plan|Insurance)\s*(?:ID|No|Number|#)\.?\s*[:#]?\s*[A-Z0-9-]{4,}\b"),
+    # NOTE: the label anchors the match but is captured in group(1) so only the
+    # VALUE is boxed — the "MRN"/"Member ID" label stays visible.
+    ("medical", "medical record no.", r"\b(?:MRN|Medical\s*Record(?:\s*(?:No|Number|#))?)\s*[:#]?\s*([A-Z0-9-]{4,})\b"),
+    ("medical", "health plan/member ID", r"\b(?:Member|Beneficiary|Subscriber|Policy|Group|Plan|Insurance)\s*(?:ID|No|Number|#)\.?\s*[:#]?\s*([A-Z0-9-]{4,})\b"),
     ("other", "URL", r"\bhttps?://[^\s]+|\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ("other", "VIN", r"\b[A-HJ-NPR-Z0-9]{17}\b"),
     ("other", "IP address", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
@@ -148,10 +154,13 @@ def regex_hits(text: str) -> list[dict]:
     hits = []
     for cat, label, pat in REGEX_RULES:
         for m in re.finditer(pat, text):
-            s = m.group(0)
-            if label == "credit card" and not _luhn(s):
+            full = m.group(0)
+            if label == "credit card" and not _luhn(full):
                 continue
-            hits.append({"category": cat, "label": label, "text": s.strip()})
+            # If the rule captured a value group, box ONLY that (the label stays
+            # visible); otherwise box the whole match.
+            value = (m.group(1) if m.groups() else full) or full
+            hits.append({"category": cat, "label": label, "text": value.strip()})
     return hits
 
 
@@ -214,8 +223,10 @@ def _emit_line_boxes(matched: list[dict], hit: dict, pad_frac: float) -> list[Bo
 def _box_from_words(ws: list[dict], hit: dict, pad_frac: float) -> Box:
     x1 = min(w["x1"] for w in ws); y1 = min(w["y1"] for w in ws)
     x2 = max(w["x2"] for w in ws); y2 = max(w["y2"] for w in ws)
-    padx = int((x2 - x1) * pad_frac) + 2
-    pady = int((y2 - y1) * pad_frac) + 2
+    # Pad to fully cover the glyphs, but CAP it — a proportional pad on a wide
+    # value (long URL) would otherwise bleed onto the neighbouring label.
+    padx = min(int((x2 - x1) * pad_frac) + 2, 10)
+    pady = min(int((y2 - y1) * pad_frac) + 2, 10)
     return Box(x1=x1 - padx, y1=y1 - pady, x2=x2 + padx, y2=y2 + pady,
               category=hit["category"], label=hit["label"], text=hit["text"],
               confidence=0.98, source="ocr_grounded",
@@ -233,9 +244,31 @@ def _norm(s: str) -> str:
 _FUZZY_FLOOR = 0.82
 
 
+def _trim_to_target(matched: list[dict], target: str) -> list[dict]:
+    """Drop leading/trailing OCR words that fall OUTSIDE the matched target span.
+
+    Grounding accumulates words from the start of a line, so the value box would
+    otherwise swallow a preceding field label ("Phone: (559)..." -> box over
+    "Phone:" too). Keep only the words whose characters overlap the target span.
+    Safe no-op for a fuzzy match, where the target is not present verbatim.
+    """
+    norm = [_norm(w["text"]) for w in matched]
+    pos = "".join(norm).find(target)
+    if pos < 0:
+        return matched
+    start, end = pos, pos + len(target)
+    out, cursor = [], 0
+    for w, n in zip(matched, norm):
+        w0, w1 = cursor, cursor + len(n)
+        cursor = w1
+        if w1 > start and w0 < end:            # word overlaps [start, end)
+            out.append(w)
+    return out or matched
+
+
 def _ground_exact(hit: dict, target: str, words: list[dict], norm_words: list[str],
                   claimed: set, boxes: list[Box], pad_frac: float) -> bool:
-    """Verbatim (whitespace-insensitive) grounding — the fast, precise path.
+    """Verbatim (whitespace-insensitive) grounding -- the fast, precise path.
     Emits a box for EVERY occurrence. Returns True if it placed at least one."""
     placed = False
     n = len(words)
@@ -247,7 +280,8 @@ def _ground_exact(hit: dict, target: str, words: list[dict], norm_words: list[st
             if target in acc:
                 if (hit["text"], i) not in claimed:
                     claimed.add((hit["text"], i))
-                    boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
+                    # trim leading/trailing label words so only the value is boxed
+                    boxes.extend(_emit_line_boxes(_trim_to_target(matched, target), hit, pad_frac))
                     placed = True
                 break
             if len(acc) > len(target) + 6:
@@ -282,7 +316,8 @@ def _ground_fuzzy(hit: dict, target: str, words: list[dict], norm_words: list[st
         return True
     claimed.add((hit["text"], i))
     start = len(boxes)
-    boxes.extend(_emit_line_boxes(matched, hit, pad_frac))
+    # trim is a safe no-op when the target is not present verbatim (fuzzy case)
+    boxes.extend(_emit_line_boxes(_trim_to_target(matched, target), hit, pad_frac))
     for b in boxes[start:]:
         b.confidence = 0.80
         b.reason = (b.reason or "").rstrip() + f" [fuzzy OCR match {ratio:.0%}]"
@@ -293,10 +328,11 @@ def ground_text_boxes(hits: list[dict], words: list[dict], pad_frac=0.06,
                       ungrounded: list[dict] | None = None) -> list[Box]:
     """Map each hit string to exact OCR word boxes. Handles multi-line spans
     (wrapped addresses) by emitting one box per line segment. No grid drift.
+    Leading/trailing label words are trimmed so only the value is boxed.
 
     Tries verbatim grounding first; if a hit can't be placed that way, falls
     back to an OCR-tolerant fuzzy match. Any hit that STILL can't be located is
-    appended to `ungrounded` (when provided) so the caller can surface it — a
+    appended to `ungrounded` (when provided) so the caller can surface it -- a
     detected-but-unplaceable item is a silent miss otherwise, which for a
     recall-biased redactor is the most dangerous failure mode."""
     boxes: list[Box] = []
@@ -361,21 +397,23 @@ TEXT_ENTITY_PROMPT = (
 # unless they're part of a re-identifying phrase Presidio would miss.
 QUASI_ID_PROMPT = (
     "You are a records/FOIA redaction officer doing a SECOND pass. A deterministic "
-    "engine has already flagged the obvious identifiers (names, addresses, emails, "
-    "phones, SSNs, account and ID numbers, dates). Your job is the subtle layer it "
-    "cannot reason about: QUASI-IDENTIFIERS and re-identifying context — phrases "
-    "that, in combination, could single out a specific person even with the obvious "
-    "identifiers removed.\n"
+    "engine has already flagged the obvious identifiers (names, emails, phones, "
+    "SSNs, account and ID numbers, dates, and the CITY of an address). Your job is "
+    "two things it cannot reason about:\n"
+    "1. COMPLETE STREET ADDRESSES — the upstream engine only catches the city/ZIP, "
+    "so return each full mailing address as ONE span (number + street + unit + city "
+    "+ state + ZIP, e.g. '415 Oak Street, Apt 3, Fresno, CA 93706').\n"
+    "2. QUASI-IDENTIFIERS and re-identifying context — phrases that, in combination, "
+    "could single out a specific person even with the obvious identifiers removed. "
     "Examples: a unique job title tied to a place ('the only female fire captain in "
-    "Dubuque'); a distinctive medical condition or diagnosis; a rare event, case, or "
-    "docket description; a relationship that pins an identity ('the plaintiff's "
-    "twin brother'); an unusual physical description; a non-standard internal ID, "
-    "badge, or reference number the rules missed.\n"
-    "Do NOT re-list plain names, addresses, emails, phones, or standard ID numbers — "
-    "those are already handled. Only return spans that add re-identification risk.\n"
+    "Dubuque'); a distinctive medical condition; a rare case/docket description; a "
+    "relationship that pins an identity ('the plaintiff's twin brother'); a "
+    "non-standard internal ID or badge number the rules missed.\n"
+    "Do NOT re-list plain names, emails, phones, or standard ID numbers — those are "
+    "already handled. Return full addresses plus anything that adds re-identification risk.\n"
     "Copy each 'text' value EXACTLY (verbatim substring) so it can be located.\n"
     "Return ONLY JSON: {\"items\":[{\"text\":\"verbatim substring\",\"category\":"
-    "\"person|medical|gov_id|financial|other\",\"reason\":\"why it re-identifies\"}]}."
+    "\"address|person|medical|gov_id|financial|other\",\"reason\":\"why it re-identifies\"}]}."
     " If none, {\"items\":[]}.\n\nDOCUMENT:\n"
 )
 
