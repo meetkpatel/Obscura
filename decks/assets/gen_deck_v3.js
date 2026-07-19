@@ -110,8 +110,10 @@ s.addText("Obscura\nOverview", { x: 0.5, y: 0.85, w: 7.2, h: 2.75, fontFace: HEA
   fontSize: 62, color: WHITE, lineSpacing: 72, charSpacing: 0 });
 s.addText("Private clinical AI on the clinic’s own laptop", {
   x: 0.55, y: 3.75, w: 7.2, h: 0.5, fontFace: SANS, fontSize: 18, color: LGRAY });
-s.addText("OBSCURA", { x: 11.15, y: 0.35, w: 1.7, h: 0.35, align: "right", fontFace: SEMI,
-  fontSize: 11, color: WHITE, charSpacing: 3 });
+// Primary brand mark from the application repo; it sits on the cover's dark
+// field without introducing a second rectangular panel over the hero image.
+s.addImage({ path: "../../public/logo.webp", x: 7.08, y: 0.42, w: 0.68, h: 0.68,
+  transparency: 0 });
 // WHO IT SERVES — the client ledger (Kevin directive: audience on the cover)
 s.addShape("rect", { x: 0.55, y: 4.6, w: 7.0, h: 0.012, fill: { color: DGRAY } });
 s.addText([
@@ -600,6 +602,8 @@ microFooter(s, false);
 s = p.addSlide();
 s.background = { color: BLACK };
 cropMarks(s);
+s.addImage({ path: "../../public/brand-lockup.png", x: 4.62, y: 0.48, w: 4.1, h: 1.08,
+  transparency: 0 });
 s.addText("As fast as AI.\nAs private as a locked filing cabinet.", {
   x: 0.55, y: 2.5, w: 12.23, h: 1.7, align: "center", fontFace: SANS, fontSize: 34,
   bold: true, color: WHITE });
