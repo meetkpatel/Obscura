@@ -491,6 +491,13 @@ def run_scan(roots: list[str] | None, model: str, use_gemma=True, deep=True) -> 
                       str(Path.home() / "Desktop")]
     findings = scan_secrets(roots) + scan_config() + scan_network() + scan_cis()
     optimizations, reclaim_mb = scan_optimization(deep=deep)
+    # tag findings that have a safe one-click fix
+    try:
+        import optimize_exec
+        for o in optimizations:
+            o.action_id = optimize_exec.FINDING_TO_ACTION.get(o.id, "")
+    except Exception:
+        pass
     if use_gemma:
         explain(findings, model)
         explain(optimizations, model)

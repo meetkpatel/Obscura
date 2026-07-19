@@ -86,6 +86,7 @@ class Finding(BaseModel):
     requires_admin: bool = False
     reversible: bool = False
     reclaimable_mb: int = 0              # disk space this optimization frees
+    action_id: str = ""                 # a safe one-click fix exists (optimize_exec)
     path: Optional[str] = None           # for secrets-on-disk -> "send to Redactor"
     can_redact: bool = False
 
