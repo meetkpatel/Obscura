@@ -183,6 +183,7 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
       <div class="tab active" data-v="redact" onclick="tab('redact')"><span class="tico">🛡</span> Redact</div>
       <div class="tab" data-v="secure" onclick="tab('secure')"><span class="tico">🔒</span> Secure</div>
       <div class="tab" data-v="organize" onclick="tab('organize')"><span class="tico">🗂</span> Organize</div>
+      <div class="tab" data-v="transcribe" onclick="tab('transcribe')"><span class="tico">🎙</span> Scribe</div>
     </div>
     <div class="spacer"></div>
     <span class="badge" id="egressBadge" onclick="checkEgress()" style="cursor:pointer" title="Click to verify no data left this machine"><span class="dot"></span><span id="egressText">On-device · No network</span></span>
@@ -389,6 +390,29 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
           <div style="max-height:50vh;overflow:auto;margin-top:8px">
             <table id="orgTable"><thead><tr><th></th><th>Current</th><th>Proposed location &amp; name</th><th>Why</th><th>Conf.</th></tr></thead><tbody></tbody></table>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRANSCRIBE / SCRIBE -->
+    <section class="view" id="v-transcribe">
+      <h2>Turn a dictation into a clinical note</h2>
+      <p class="sub">Dictate or paste a visit, and on-device AI structures it into a clean SOAP note and flags every patient identifier — then hand it straight to Redact. Gemma does the work here; nothing leaves this machine.</p>
+      <div class="row">
+        <div class="col panel">
+          <div class="flex" style="justify-content:space-between;margin-bottom:8px">
+            <strong>Dictation</strong>
+            <label class="ghost" style="padding:6px 12px;font-size:13px;border:1px solid var(--line);border-radius:8px;cursor:pointer">🎙 audio<input type="file" id="scribeAudio" class="hidden" accept="audio/*" onchange="scribeAudio(this.files[0])"></label>
+          </div>
+          <textarea id="scribeText" class="field" style="min-height:200px;font-family:inherit" placeholder="e.g. Patient Maria Lopez seen today for diabetes follow-up. Reports good adherence to metformin. BP 128/80. A1c 6.9. Continue meds, recheck labs in 3 months."></textarea>
+          <div class="flex" style="margin-top:10px">
+            <button onclick="doScribe()" id="scribeBtn">Transcribe &amp; structure ▸</button>
+            <button class="ghost" onclick="loadScribeSample()">Try a sample</button>
+          </div>
+        </div>
+        <div class="col panel">
+          <strong>Clinical note</strong>
+          <div id="scribeOut" style="margin-top:10px"><div class="rs">Your structured SOAP note appears here.</div></div>
         </div>
       </div>
     </section>
@@ -991,6 +1015,42 @@ async function doUndo(){
   try{ const r=await jfetch('/api/organize/undo',{method:'POST'},120000);
     toast('Restored '+r.restored+' files to their original locations.');
   }catch(e){ toast('undo failed: '+e.message); }
+}
+
+/* ---------- TRANSCRIBE / SCRIBE ---------- */
+function loadScribeSample(){
+  $('#scribeText').value="Patient Robert Sanchez, MRN 4471982, seen today March 3 2026 for follow-up of hypertension and type 2 diabetes. Reports good adherence to metformin and lisinopril. Blood pressure 132 over 84, weight 190 pounds, stable. A1c improved to 7.1 from 8.0. No chest pain or shortness of breath. Assessment: diabetes and hypertension both improving. Plan: continue current medications, recheck A1c and basic metabolic panel in 3 months, reinforce low-sodium diet, follow up in 3 months or sooner if symptoms.";
+}
+function renderNote(d){
+  if(d.error){ $('#scribeOut').innerHTML='<div class="proofbox">⚠ '+esc(d.error)+'</div>'; return; }
+  const s=d.soap||{};
+  const sec=(t,v)=>`<div style="margin:8px 0"><div class="lab" style="color:var(--accent)">${t}</div><div class="rs">${esc(typeof v==='string'?v:JSON.stringify(v))||'—'}</div></div>`;
+  const phi=(d.phi_found||[]).map(p=>`<span class="pill" style="color:var(--crit)">${esc(typeof p==='string'?p:JSON.stringify(p))}</span>`).join(' ');
+  $('#scribeOut').innerHTML=`
+    <div class="rs" style="margin-bottom:6px"><b>${esc(d.patient||'—')}</b>${d.date?(' · '+esc(d.date)):''}${d.source==='audio'?' · <span style="color:var(--blue)">🎙 from audio</span>':''}</div>
+    ${sec('SUBJECTIVE',s.subjective)}${sec('OBJECTIVE',s.objective)}${sec('ASSESSMENT',s.assessment)}${sec('PLAN',s.plan)}
+    ${phi?`<div class="proofbox" style="margin-top:10px"><small class="k">🔒 PHI in this note (redact before sharing):</small><div style="margin-top:6px">${phi}</div></div>`:''}
+    <button class="ghost" style="margin-top:12px" onclick="tab('redact');toast('Open Redact and drop the exported note to de-identify it.')">→ Send to Redact</button>`;
+}
+async function doScribe(){
+  const text=$('#scribeText').value.trim();
+  if(!text){ toast('type or paste a dictation first'); return; }
+  $('#scribeBtn').innerHTML='<span class="spin"></span> Gemma is structuring the note…';
+  try{
+    const d=await jfetch('/api/transcribe/text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text, quality:q&&q()})},240000);
+    renderNote(d);
+  }catch(e){ $('#scribeOut').innerHTML='<div class="proofbox">⚠ '+e.message+'</div>'; }
+  $('#scribeBtn').textContent='Transcribe & structure ▸';
+}
+async function scribeAudio(f){
+  if(!f) return;
+  $('#scribeOut').innerHTML='<div class="rs"><span class="spin"></span> Transcribing audio on-device…</div>';
+  const fd=new FormData(); fd.append('file',f);
+  try{
+    const d=await jfetch('/api/transcribe/audio',{method:'POST',body:fd},300000);
+    if(d.transcript) $('#scribeText').value=d.transcript;
+    renderNote(d);
+  }catch(e){ $('#scribeOut').innerHTML='<div class="proofbox">⚠ '+e.message+'</div>'; }
 }
 </script>
 </body>

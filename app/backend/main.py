@@ -22,6 +22,7 @@ import hardware
 import phase1_redact as p1
 import phase2_secure as p2
 import phase3_organize as p3
+import phase4_transcribe as p4
 from contracts import Connection, EgressReport, OrganizePlan
 
 app = FastAPI(title="Obscura", docs_url=None, redoc_url=None)
@@ -577,6 +578,29 @@ def organize_undo():
     out = p3.undo(JOURNAL)
     companion.log("organize", f"Undo — {out.get('restored', 0)} file(s) restored", "done")
     return out
+
+
+# --------------------------------------------------------------------------
+# Phase 4 — TRANSCRIBE (on-device clinical scribe)
+# --------------------------------------------------------------------------
+
+@app.post("/api/transcribe/text")
+def transcribe_text(body: dict = Body(...)):
+    """Structure a dictation into a clinical SOAP note + flag PHI. On-device."""
+    model = gemma.QUALITY_MODEL if body.get("quality") else gemma.FAST_MODEL
+    note = p4.transcribe_text(body.get("text", ""), model)
+    STATE["last_note"] = note
+    return note
+
+
+@app.post("/api/transcribe/audio")
+async def transcribe_audio(file: UploadFile = File(...), quality: bool = False):
+    """Attempt on-device audio transcription (Gemma 4 native audio) then structure."""
+    raw = await file.read()
+    model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
+    note = p4.transcribe_audio(raw, file.filename or "audio", model)
+    STATE["last_note"] = note
+    return note
 
 
 # --------------------------------------------------------------------------
