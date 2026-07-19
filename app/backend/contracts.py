@@ -79,11 +79,13 @@ class Finding(BaseModel):
     collector: str                       # which scanner produced it
     title: str
     severity: Severity
+    kind: Literal["security", "optimization"] = "security"
     detail: str = ""                     # raw, deterministic evidence
     explanation: str = ""                # Gemma plain-English what/why/fix
     remediation: str = ""                # from the FixRegistry, if any
     requires_admin: bool = False
     reversible: bool = False
+    reclaimable_mb: int = 0              # disk space this optimization frees
     path: Optional[str] = None           # for secrets-on-disk -> "send to Redactor"
     can_redact: bool = False
 
@@ -94,6 +96,10 @@ class ScanResult(BaseModel):
     score_breakdown: dict
     admin: bool
     generated_offline: bool = True
+    optimizations: list[Finding] = Field(default_factory=list)
+    reclaimable_mb: int = 0
+    performance_score: int = 100
+    perf_summary: str = ""               # Gemma's plain-English optimization plan
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +120,8 @@ class FileProposal(BaseModel):
     confidence: float = 0.5
     quick_hash: str = ""
     is_duplicate: bool = False           # exact copy of another kept file
+    sensitive: bool = False              # likely contains PHI/PII -> Redact candidate
+    transcribable: bool = False          # audio/voice -> transcription candidate
     excluded: bool = False
 
 

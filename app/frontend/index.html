@@ -250,19 +250,34 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
     <!-- SECURE -->
     <section class="view" id="v-secure">
       <h2>Protect the machine your records live on</h2>
-      <p class="sub">The device holding patient data is part of your security posture. This read-only scan checks for exposed secrets, weak configuration, and risky services — mapped to CIS Level 1 benchmarks — and explains every finding in plain language. Nothing changes without your click.</p>
-      <button onclick="doScan()" id="scanBtn">Run scan</button>
-      <span class="rs" id="scanNote" style="margin-left:12px"></span>
+      <p class="sub">The device holding patient data is part of your security posture. This read-only scan checks security (exposed secrets, weak config, risky services — mapped to CIS Level 1) AND performance (reclaimable space, startup load, updates, cleanup) — the analysis a paid PC optimizer does, on-device, with Gemma explaining every finding. Nothing changes without your click; no risky registry edits.</p>
+      <div class="flex">
+        <button onclick="doScan()" id="scanBtn">Run full scan</button>
+        <label class="flex rs" style="gap:6px"><input type="checkbox" id="deepScan"> deep WinSxS analysis (slower)</label>
+        <span class="rs" id="scanNote"></span>
+      </div>
       <div id="scanOut" class="hidden" style="margin-top:20px">
         <div class="row">
-          <div class="panel" style="text-align:center;min-width:220px">
+          <div class="panel" style="text-align:center;min-width:180px">
             <div class="rs">Safety Score</div>
             <div class="score" id="scoreVal">–</div>
             <div class="rs" id="scoreBreak" style="margin-top:8px"></div>
           </div>
+          <div class="panel" style="text-align:center;min-width:180px">
+            <div class="rs">Performance Score</div>
+            <div class="score" id="perfVal">–</div>
+            <div class="rs" id="reclaimVal" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:16px">
           <div class="col panel">
-            <strong>Findings</strong>
+            <strong>🛡 Security findings</strong>
             <div id="findings" style="margin-top:12px"></div>
+          </div>
+          <div class="col panel">
+            <strong>⚡ Performance &amp; cleanup</strong>
+            <div class="rs" id="perfSummary" style="margin:8px 0"></div>
+            <div id="optimizations" style="margin-top:6px"></div>
           </div>
         </div>
       </div>
@@ -617,25 +632,39 @@ async function doRedact(){
 }
 
 /* ---------- SECURE ---------- */
+function findingHtml(f, extra){
+  return `<div class="item"><div style="flex:1">
+    <div><span class="sev sev-${f.severity}">${f.severity.toUpperCase()}</span> · <span class="lab">${esc(f.title)}</span>${extra||''}</div>
+    <div class="rs">${esc(f.explanation||f.detail)}</div>
+    ${f.remediation?`<div class="rs"><small class="k">Fix:</small> ${esc(f.remediation)} ${f.requires_admin?'<span class="pill">admin</span>':''} ${f.reversible?'<span class="pill">reversible</span>':''}</div>`:''}
+  </div></div>`;
+}
 async function doScan(){
   $('#scanOut').classList.remove('hidden');
-  $('#scanBtn').innerHTML='<span class="spin"></span> Scanning…';
+  $('#scanBtn').innerHTML='<span class="spin"></span> Scanning security + performance…';
   $('#findings').innerHTML='<div class="rs">collecting…</div>';
+  $('#optimizations').innerHTML='<div class="rs">analyzing cleanup…</div>';
   try{
-    const r=await (await fetch('/api/secure/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:q()})})).json();
+    const r=await jfetch('/api/secure/scan',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({quality:q(), deep:$('#deepScan').checked})}, 180000);
     $('#scoreVal').textContent=r.safety_score;
     $('#scoreVal').style.color = r.safety_score>=80?'#19c3a5':r.safety_score>=55?'#f2b544':'#ff5c6c';
     $('#scoreBreak').innerHTML = Object.entries(r.score_breakdown).map(([k,v])=>`<span class="pill">${k}: −${v}</span>`).join('')||'clean';
-    $('#scanNote').textContent = r.admin?'(admin scan)':'(run as Administrator for full config checks)';
-    $('#findings').innerHTML = r.findings.length? r.findings.map(f=>`
-      <div class="item"><div style="flex:1">
-        <div><span class="sev sev-${f.severity}">${f.severity.toUpperCase()}</span> · <span class="lab">${f.title}</span>
-        ${f.can_redact?`<button class="ghost" style="padding:3px 10px;font-size:12px;margin-left:8px" onclick="sendToRedactor('${(f.path||'').replace(/\\/g,'\\\\')}')">→ Send to Redactor</button>`:''}</div>
-        <div class="rs">${f.explanation||f.detail}</div>
-        ${f.remediation?`<div class="rs"><small class="k">Fix:</small> ${f.remediation} ${f.requires_admin?'<span class="pill">admin</span>':''} ${f.reversible?'<span class="pill">reversible</span>':''}</div>`:''}
-      </div></div>`).join('') : '<div class="proofbox pass">✓ No exposure found.</div>';
-  }catch(e){ $('#findings').innerHTML='scan failed: '+e; }
-  $('#scanBtn').textContent='Run scan';
+    $('#scanNote').textContent = r.admin?'(admin scan)':'(run as Administrator for full checks)';
+    $('#findings').innerHTML = r.findings.length? r.findings.map(f=>findingHtml(f,
+      f.can_redact?` <button class="ghost" style="padding:3px 10px;font-size:12px;margin-left:6px" onclick="sendToRedactor('${esc((f.path||'').replace(/\\/g,'\\\\'))}')">→ Send to Redactor</button>`:''
+    )).join('') : '<div class="proofbox pass">✓ No exposure found.</div>';
+    // performance
+    $('#perfVal').textContent=r.performance_score;
+    $('#perfVal').style.color = r.performance_score>=80?'#19c3a5':r.performance_score>=55?'#f2b544':'#ff5c6c';
+    const gb=(r.reclaimable_mb/1024);
+    $('#reclaimVal').innerHTML = r.reclaimable_mb>0? `<b style="color:var(--accent)">${gb>=1?gb.toFixed(1)+' GB':r.reclaimable_mb+' MB'}</b> reclaimable` : 'nothing to reclaim';
+    $('#perfSummary').innerHTML = r.perf_summary? `<small class="k">Plan:</small> ${esc(r.perf_summary)}` : '';
+    $('#optimizations').innerHTML = (r.optimizations&&r.optimizations.length)? r.optimizations.map(f=>findingHtml(f,
+      f.reclaimable_mb>50?` <span class="pill" style="color:var(--accent)">${f.reclaimable_mb>=1024?(f.reclaimable_mb/1024).toFixed(1)+' GB':f.reclaimable_mb+' MB'}</span>`:''
+    )).join('') : '<div class="proofbox pass">✓ Clean — nothing to optimize.</div>';
+  }catch(e){ $('#findings').innerHTML='scan failed: '+e.message; $('#optimizations').innerHTML=''; }
+  $('#scanBtn').textContent='Run full scan';
 }
 function sendToRedactor(path){ tab('redact'); toast('Loaded '+path+' into Redactor (demo: drop the file to redact it).'); }
 
@@ -773,8 +802,12 @@ function renderFolderTree(proposals){
 
 function renderPlan(r){
   $('#orgOut').classList.remove('hidden');
+  const phi=(r.proposals||[]).filter(p=>p.sensitive).length;
+  const aud=(r.proposals||[]).filter(p=>p.transcribable).length;
   $('#planNote').innerHTML = `${r.scanned} files scanned · ${r.duplicates.length} duplicate set(s)`
-    + (r.capped? ` · <span style="color:var(--warn)">⚠ reached the ${r.cap}-file batch cap — run again after applying to continue through the rest</span>` : '');
+    + (phi? ` · <span style="color:var(--crit)">🔒 ${phi} contain PHI — Redact before sharing</span>`:'')
+    + (aud? ` · <span style="color:var(--blue)">🎙 ${aud} audio — transcribable on-device</span>`:'')
+    + (r.capped? ` · <span style="color:var(--warn)">⚠ reached the ${r.cap}-file batch cap — run again after applying to continue</span>` : '');
   // structure tree — visual, expandable, like a file explorer
   $('#treePreview').innerHTML = renderFolderTree(r.proposals);
   $('#taxReason').innerHTML = '<small class="k">Why this structure:</small> '+esc(r.taxonomy_reason);
@@ -800,8 +833,10 @@ function renderPlan(r){
                 onchange="OVERRIDES[this.dataset.src]=this.value">${opts}</select>`
              +` <span class="mono rs">/ ${esc(p.new_name)}</span>`;
     }
+    const badges=(p.sensitive?` <span class="pill" style="color:var(--crit)" title="Likely contains PHI — redact before sharing">🔒 PHI</span>`:'')
+                +(p.transcribable?` <span class="pill" style="color:var(--blue)" title="Audio — transcribable on-device">🎙 audio</span>`:'');
     tr.innerHTML=`<td><input type="checkbox" checked data-src="${esc(p.src)}"></td>
-      <td class="mono">${esc(p.old_name)}</td>
+      <td class="mono">${esc(p.old_name)}${badges}</td>
       <td>${locCell}</td>
       <td class="rs">${esc(p.reason)}</td><td>${(p.confidence*100|0)}%</td>`;
     tb.appendChild(tr); });

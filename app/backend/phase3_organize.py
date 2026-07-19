@@ -38,6 +38,11 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "AppData",
              "Program Files", "Program Files (x86)", "ProgramData", ".cache",
              "_Organized", "_Duplicates_ForReview"}
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma"}
+# Doc types that carry protected health info (redaction candidates)
+PHI_DOCTYPES = {"visit-note", "progress-note", "lab-result", "imaging-report",
+                "pathology-report", "discharge-summary", "consult-note",
+                "referral", "prescription", "medication-list", "eob", "claim"}
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +240,10 @@ def signature(fp: Path) -> tuple[str, list[bytes]]:
             im = Image.open(fp).convert("RGB"); im.thumbnail((720, 720))
             buf = io.BytesIO(); im.save(buf, "PNG")
             return f"[IMAGE] {fp.name}", [buf.getvalue()]
+        if ext in AUDIO_EXTS:
+            # Gemma 4 is natively audio-capable; here we route by name and flag it
+            # for transcription (Obscura's transcription path) — clinics dictate.
+            return f"[AUDIO recording / dictation] {fp.name}", []
     except Exception:
         pass
     return f"[{ext}] {fp.name}", []
@@ -427,13 +436,18 @@ def build_plan(root: str, model: str, profile="healthcare", limit=200,
         tree.setdefault(folder, 0)
         tree[folder] += 1
         reason_bits = [meta.get("doc_type", ""), patient_norm, _clean_date(meta.get("doc_date"))]
+        dtype_l = (meta.get("doc_type") or "").lower()
+        is_audio = fp.suffix.lower() in AUDIO_EXTS
+        # PHI candidate: a clinical doc type or a file tied to a named patient
+        sensitive = profile == "healthcare" and (dtype_l in PHI_DOCTYPES or bool(patient_norm))
         proposals.append(FileProposal(
             src=str(fp), dst=dst, old_name=fp.name, new_name=new_name,
             category=cat, subcategory=sub, doc_type=meta.get("doc_type", ""),
             patient=patient_norm, topic=meta.get("descriptor", ""),
             reason=" · ".join([b for b in reason_bits if b]) or "classified from first page",
             confidence=_confidence(meta, profile),
-            quick_hash=meta.get("_qh", ""), is_duplicate=False))
+            quick_hash=meta.get("_qh", ""), is_duplicate=False,
+            sensitive=sensitive, transcribable=is_audio))
     proposals.sort(key=lambda p: (p.is_duplicate, p.confidence))
     conv = ("YYYY-MM-DD_Patient_DocType_description.ext — sorts by date, groups by "
             "patient, and is self-describing so search finds it fast."

@@ -184,6 +184,146 @@ def _reg(r: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Collector: OPTIMIZATION / cleanup — the read-only analysis a paid "PC cleaner"
+# does, using only Microsoft-supported methods. Grounded in Windows 11 cleanup
+# guidance (temp/cache/WinSxS/update cleanup, startup, TRIM, power, updates).
+# We ANALYZE + estimate reclaimable space; the FixRegistry describes the safe,
+# consented command. We deliberately DO NOT touch the registry (registry
+# "cleaners" are snake oil — near-zero benefit, real risk).
+# ---------------------------------------------------------------------------
+
+def _dir_size_mb(path: str, cap_files=60000) -> int:
+    """Sum a directory's file sizes in MB (best-effort, bounded)."""
+    total, n = 0, 0
+    try:
+        for dp, dn, fn in os.walk(path):
+            for f in fn:
+                try:
+                    total += os.path.getsize(os.path.join(dp, f))
+                except OSError:
+                    pass
+                n += 1
+                if n >= cap_files:
+                    return total // (1024 * 1024)
+    except Exception:
+        pass
+    return total // (1024 * 1024)
+
+
+def scan_optimization(deep=True) -> tuple[list[Finding], int]:
+    """Return (optimization findings, total reclaimable MB)."""
+    if not IS_WIN:
+        return [], 0
+    f: list[Finding] = []
+    reclaim_total = 0
+    win = os.environ.get("SystemRoot", r"C:\Windows")
+
+    def add_space(id_, title, mb, remediation, sev_hint=None):
+        nonlocal reclaim_total
+        if mb < 50:      # ignore trivial
+            return
+        reclaim_total += mb
+        sev = sev_hint or ("medium" if mb > 2000 else "low")
+        f.append(Finding(id=id_, collector="optimization", kind="optimization",
+                         title=f"{title} — ~{mb/1024:.1f} GB reclaimable" if mb >= 1024
+                               else f"{title} — ~{mb} MB reclaimable",
+                         severity=sev, detail=f"{mb} MB in {title.lower()}",
+                         remediation=remediation, reclaimable_mb=mb,
+                         requires_admin=False, reversible=False))
+
+    # 1. Temp files (user + system)
+    temp_mb = _dir_size_mb(os.environ.get("TEMP", "")) + _dir_size_mb(os.path.join(win, "Temp"))
+    add_space("opt_temp", "Temporary files", temp_mb,
+              "Disk Cleanup or Storage Sense clears %TEMP% and Windows\\Temp safely.")
+
+    # 2. Windows Update download cache
+    add_space("opt_update", "Windows Update cache",
+              _dir_size_mb(os.path.join(win, "SoftwareDistribution", "Download")),
+              "Clear via Disk Cleanup 'Windows Update Cleanup' (needs the update service stopped).")
+
+    # 3. Delivery Optimization cache
+    add_space("opt_do", "Delivery Optimization cache",
+              _dir_size_mb(os.path.join(win, "SoftwareDistribution", "DeliveryOptimization")),
+              "Disk Cleanup 'Delivery Optimization Files'.")
+
+    # 4. Recycle Bin
+    rb = _ps("(Get-ChildItem 'C:\\$Recycle.Bin' -Recurse -Force -ErrorAction SilentlyContinue "
+             "| Measure-Object Length -Sum).Sum")
+    try:
+        add_space("opt_recycle", "Recycle Bin", int(int(rb) / 1024 / 1024) if rb.strip().isdigit() else 0,
+                  "Empty the Recycle Bin (Clear-RecycleBin).")
+    except Exception:
+        pass
+
+    # 5. WinSxS component store (DISM analyze — Microsoft-supported, slower)
+    if deep:
+        out = _ps("dism.exe /online /cleanup-image /AnalyzeComponentStore", timeout=70)
+        m = re.search(r"Actual Size of Component Store\s*:\s*([\d.]+)\s*(MB|GB)", out)
+        rec = re.search(r"(?:Reclaimable|can be cleaned)\s*:?\s*(Yes|No)", out, re.I)
+        recommend = re.search(r"Component Store Cleanup Recommended\s*:\s*(Yes|No)", out, re.I)
+        if recommend and recommend.group(1).lower() == "yes":
+            f.append(Finding(id="opt_winsxs", collector="optimization", kind="optimization",
+                             title="Windows component store (WinSxS) cleanup recommended",
+                             severity="low", detail=out.strip()[-300:] or "DISM recommends cleanup",
+                             remediation="dism.exe /online /cleanup-image /StartComponentCleanup "
+                                         "(Microsoft-supported; removes superseded update components).",
+                             reclaimable_mb=0, requires_admin=True, reversible=False))
+
+    # 6. Startup impact — the #1 boot-time slowdown
+    startups = _ps("(Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue).Name -join '|'")
+    n_start = len([s for s in startups.split("|") if s.strip()]) if startups else 0
+    if n_start >= 8:
+        f.append(Finding(id="opt_startup", collector="optimization", kind="optimization",
+                         title=f"{n_start} apps launch at startup",
+                         severity="medium" if n_start >= 15 else "low",
+                         detail=f"{n_start} startup entries: {startups[:200]}",
+                         remediation="Disable non-essential startup apps in Task Manager > Startup "
+                                     "(keep security software). The top boot-time win.",
+                         requires_admin=False, reversible=True))
+
+    # 7. Storage Sense enabled?
+    ss = _ps("(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\StorageSense\\Parameters\\StoragePolicy' "
+             "-Name '01' -ErrorAction SilentlyContinue).'01'")
+    if ss != "1":
+        f.append(Finding(id="opt_storagesense", collector="optimization", kind="optimization",
+                         title="Storage Sense is off (automatic cleanup disabled)",
+                         severity="low", detail="StorageSense policy not enabled",
+                         remediation="Enable Storage Sense (Settings > System > Storage) to auto-clear "
+                                     "temp files and empty the Recycle Bin on a schedule.",
+                         requires_admin=False, reversible=True))
+
+    # 8. Power plan
+    plan = _ps("powercfg /getactivescheme")
+    if plan and "power saver" in plan.lower():
+        f.append(Finding(id="opt_power", collector="optimization", kind="optimization",
+                         title="On the Power Saver plan (throttles performance)",
+                         severity="low", detail=plan.strip(),
+                         remediation="Switch to Balanced or High performance (powercfg /setactive SCHEME_BALANCED).",
+                         requires_admin=False, reversible=True))
+
+    # 9. SSD TRIM enabled?
+    trim = _ps("fsutil behavior query DisableDeleteNotify")
+    if "= 1" in trim.replace(" ", " "):
+        f.append(Finding(id="opt_trim", collector="optimization", kind="optimization",
+                         title="SSD TRIM is disabled (slows an SSD over time)",
+                         severity="low", detail=trim.strip(),
+                         remediation="Enable TRIM: fsutil behavior set DisableDeleteNotify 0.",
+                         requires_admin=True, reversible=True))
+
+    # 10. Pending Windows Update / reboot / build freshness
+    build = _ps("(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' "
+                "-Name DisplayVersion -ErrorAction SilentlyContinue).DisplayVersion")
+    pend = _ps("Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'")
+    if pend == "True":
+        f.append(Finding(id="opt_wu_reboot", collector="optimization", kind="optimization",
+                         title="Windows updates installed but not applied (reboot pending)",
+                         severity="medium", detail=f"Windows build {build}; reboot required",
+                         remediation="Restart to finish applying security + feature updates.",
+                         requires_admin=False, reversible=False))
+    return f, reclaim_total
+
+
+# ---------------------------------------------------------------------------
 # Collector: CIS Level 1 baseline (Windows). Grounded in the CIS Microsoft
 # Windows 11 Benchmark / NIST hardening guidance. High-value, laptop-relevant
 # controls; each check degrades gracefully and never breaks the scan.
@@ -336,15 +476,51 @@ def safety_score(findings: list[Finding]) -> tuple[int, dict]:
     return max(0, 100 - total), breakdown
 
 
-def run_scan(roots: list[str] | None, model: str, use_gemma=True) -> ScanResult:
+def perf_score(opts: list[Finding], reclaim_mb: int) -> int:
+    """Performance/cleanup score (0-100). Deduct for reclaimable clutter + perf
+    findings; formula shown to the user."""
+    s = 100
+    s -= min(30, reclaim_mb // 1024 * 5)         # -5 per GB reclaimable, cap 30
+    for f in opts:
+        s -= {"critical": 20, "high": 15, "medium": 8, "low": 4, "info": 0}.get(f.severity, 0)
+    return max(0, s)
+
+
+def run_scan(roots: list[str] | None, model: str, use_gemma=True, deep=True) -> ScanResult:
     roots = roots or [str(Path.home() / "Downloads"), str(Path.home() / "Documents"),
                       str(Path.home() / "Desktop")]
     findings = scan_secrets(roots) + scan_config() + scan_network() + scan_cis()
+    optimizations, reclaim_mb = scan_optimization(deep=deep)
     if use_gemma:
         explain(findings, model)
+        explain(optimizations, model)
     score, breakdown = safety_score(findings)
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     findings.sort(key=lambda f: order.get(f.severity, 9))
+    optimizations.sort(key=lambda f: (-f.reclaimable_mb, order.get(f.severity, 9)))
+    pscore = perf_score(optimizations, reclaim_mb)
+    perf_summary = ""
+    if use_gemma and optimizations:
+        perf_summary = _perf_plan(optimizations, reclaim_mb, model)
     return ScanResult(findings=findings, safety_score=score,
                       score_breakdown=breakdown, admin=is_admin(),
-                      generated_offline=True)
+                      generated_offline=True, optimizations=optimizations,
+                      reclaimable_mb=reclaim_mb, performance_score=pscore,
+                      perf_summary=perf_summary)
+
+
+def _perf_plan(opts: list[Finding], reclaim_mb: int, model: str) -> str:
+    """Gemma writes a short, prioritized, plain-English cleanup plan."""
+    items = [{"title": o.title, "fix": o.remediation} for o in opts[:8]]
+    prompt = (
+        "You are a helpful PC optimization assistant for a non-technical laptop "
+        "user. Given these cleanup/performance findings, write a short (3-4 "
+        "sentence) prioritized plan in plain English — what to do first for the "
+        "biggest win, and reassure them these are safe, built-in Windows actions "
+        "(no risky registry edits). Do not repeat words.\n"
+        f"Reclaimable space: ~{reclaim_mb} MB. Findings: {items}"
+    )
+    try:
+        return gemma.collapse_repeats(gemma.generate(prompt, model=model, num_predict=260).strip())
+    except gemma.GemmaError:
+        return ""

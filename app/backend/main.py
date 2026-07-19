@@ -304,7 +304,8 @@ def secure_scan(body: dict = Body(default={})):
     roots = body.get("roots")
     quality = body.get("quality", False)
     model = gemma.QUALITY_MODEL if quality else gemma.FAST_MODEL
-    res = p2.run_scan(roots, model, use_gemma=body.get("use_gemma", True))
+    res = p2.run_scan(roots, model, use_gemma=body.get("use_gemma", True),
+                      deep=body.get("deep", False))   # deep = slow WinSxS DISM analysis
     return res.model_dump()
 
 
