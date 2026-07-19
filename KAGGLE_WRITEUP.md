@@ -25,8 +25,10 @@ Gemma 4 dissolves that paradox. It is good enough, small enough, and open enough
 Obscura is one on-device engine pointed at the three surfaces of a laptop's privacy, each a plugin on the same loop — **Scan (deterministic) → Understand (Gemma 4) → Propose → Human approves → Apply → Verify → Undo:**
 
 - **REDACT** — the document is the secret. Find every sensitive item (including the full HIPAA Safe Harbor identifier set), destroy it — flattened raster, no recoverable text layer, metadata stripped — and self-verify.
-- **SECURE** — the machine is the vault. A read-only scan for plaintext secrets, weak configuration, and risky ports, with a plain-English report and a Safety Score.
-- **ORGANIZE** — the filesystem is the archive. Gemma reads each file, proposes a clean structure and names, and applies it with a crash-safe journal and one-click Undo.
+- **SECURE** — the machine is the vault. A read-only scan for plaintext secrets, weak configuration, and risky ports — plus a performance pass (a 10-point cleanup analysis that finds reclaimable disk space and scores the machine 0–100), all in a plain-English report with a Safety Score.
+- **ORGANIZE** — the filesystem is the archive. Gemma reads each file, proposes a clean structure and names, flags sensitive files for redaction and audio files for transcription, and applies it all with a crash-safe journal and one-click Undo.
+
+A fourth surface — **TRANSCRIBE**, a Gemma clinical scribe that turns a visit recording into a transcript-grounded SOAP draft (MedGemma 4B GGUF as the local-model path; drafts labeled unverified, clinician review required) — is an MVP in review as PR #9.
 
 The phases feed each other: SECURE finds a plaintext credential on disk → one click **"Send to Redactor"** → REDACT destroys it → ORGANIZE files the result. Everything runs behind an always-visible on-device badge and a live **egress panel** listing the process's own network connections — external count: 0. The UI ships zero external assets and runs with Wi-Fi off.
 
@@ -54,7 +56,7 @@ Gemma 4 is not a garnish on a rules engine; it is the reasoner doing the work re
 
 **1. Reading comprehension for detection (REDACT).** Structured PII (SSN, credit card via Luhn, MRN, email, phone, dates) is caught deterministically by Presidio — perfect precision, instant. But names, home addresses, and *re-identifying context* require reading. Our key move: we do **not** trust the model's pixel coordinates for text. We ask **Gemma 4 for the sensitive strings** ("copy the exact substrings a records officer must redact that a regex would miss"), then locate each returned string with Tesseract OCR word boxes, with fuzzy matching to survive OCR noise. **The model finds the meaning; OCR fixes the pixels.** Gemma's **native multimodal vision** (`box_2d` on a 1000×1000 grid) is reserved for genuinely visual items — signatures, faces — where a slightly loose box is safe.
 
-**2. Local reasoning as an explainer (SECURE).** Deterministic collectors produce raw findings; Gemma 4 turns each into a one-sentence, plain-English *what-this-means-and-why-it-matters* and prioritizes them. The model never scans and never executes — remediations come from a hardcoded registry.
+**2. Local reasoning as an explainer (SECURE).** Deterministic collectors produce raw findings; Gemma 4 turns each into a one-sentence, plain-English *what-this-means-and-why-it-matters*, prioritizes them, and writes a short prioritized cleanup plan for the performance findings. The model never scans and never executes — remediations come from a hardcoded registry.
 
 **3. Multimodal classification (ORGANIZE).** For each file Gemma 4 reads a cheap signature (first page of a PDF, first rows of a sheet, or — for scans and images — the picture itself via vision) and returns structured JSON: doc-type, category, entity, date, suggested descriptor. Code enforces the naming template; Gemma supplies only the understanding.
 
