@@ -50,6 +50,56 @@ function microFooter(s, dark) {
     x: 0.55, y: 7.12, w: 9.0, h: 0.28, fontFace: SANS, fontSize: 7.5, color: dark ? DGRAY : LGRAY });
 }
 
+// Editable PowerPoint pictograms. Native shapes keep the workflow slide crisp
+// in PowerPoint, Keynote, and PDF export without relying on SVG support.
+function featureIcon(slide, kind, x, y, size, color = WHITE) {
+  const line = { color, width: 1.75, beginArrowType: "none", endArrowType: "none" };
+  const clear = { color: BLACK, transparency: 100 };
+  const sx = (n) => x + n * size;
+  const sy = (n) => y + n * size;
+  const ss = (n) => n * size;
+
+  if (kind === "capture") {
+    slide.addShape("roundRect", { x: sx(0.34), y: sy(0.06), w: ss(0.32), h: ss(0.52), rectRadius: 0.04,
+      fill: clear, line });
+    slide.addShape("line", { x: sx(0.18), y: sy(0.39), w: 0, h: ss(0.15), line });
+    slide.addShape("line", { x: sx(0.82), y: sy(0.39), w: 0, h: ss(0.15), line });
+    slide.addShape("line", { x: sx(0.18), y: sy(0.54), w: ss(0.64), h: 0, line });
+    slide.addShape("line", { x: sx(0.5), y: sy(0.54), w: 0, h: ss(0.25), line });
+    slide.addShape("line", { x: sx(0.28), y: sy(0.82), w: ss(0.44), h: 0, line });
+  } else if (kind === "upload") {
+    slide.addShape("line", { x: sx(0.5), y: sy(0.12), w: 0, h: ss(0.48), line });
+    slide.addShape("line", { x: sx(0.5), y: sy(0.12), w: ss(-0.2), h: ss(0.2), line });
+    slide.addShape("line", { x: sx(0.5), y: sy(0.12), w: ss(0.2), h: ss(0.2), line });
+    slide.addShape("line", { x: sx(0.18), y: sy(0.66), w: ss(0.64), h: 0, line });
+    slide.addShape("line", { x: sx(0.18), y: sy(0.66), w: 0, h: ss(0.18), line });
+    slide.addShape("line", { x: sx(0.82), y: sy(0.66), w: 0, h: ss(0.18), line });
+    slide.addShape("line", { x: sx(0.18), y: sy(0.84), w: ss(0.64), h: 0, line });
+  } else if (kind === "transcribe") {
+    const bars = [0.28, 0.5, 0.76, 0.42, 0.84, 0.56, 0.32];
+    bars.forEach((height, i) => {
+      const bx = 0.14 + i * 0.12;
+      slide.addShape("line", { x: sx(bx), y: sy(0.5 - height / 2), w: 0, h: ss(height), line });
+    });
+  } else if (kind === "structure") {
+    slide.addShape("rect", { x: sx(0.2), y: sy(0.08), w: ss(0.6), h: ss(0.82), fill: clear, line });
+    slide.addText("SOAP", { x: sx(0.22), y: sy(0.19), w: ss(0.56), h: ss(0.2), align: "center",
+      fontFace: SANS, fontSize: 7.2, bold: true, color, margin: 0, charSpacing: 0.4 });
+    [0.48, 0.61, 0.74].forEach((yy, i) => {
+      slide.addShape("line", { x: sx(0.31), y: sy(yy), w: ss(i === 2 ? 0.28 : 0.38), h: 0,
+        line: { color, width: 1.1 } });
+    });
+  } else if (kind === "review") {
+    slide.addShape("ellipse", { x: sx(0.1), y: sy(0.27), w: ss(0.8), h: ss(0.46), fill: clear, line });
+    slide.addShape("ellipse", { x: sx(0.39), y: sy(0.39), w: ss(0.22), h: ss(0.22),
+      fill: { color }, line: { color, transparency: 100 } });
+  } else if (kind === "control") {
+    slide.addShape("ellipse", { x: sx(0.08), y: sy(0.08), w: ss(0.84), h: ss(0.84), fill: clear, line });
+    slide.addText("✓", { x: sx(0.16), y: sy(0.18), w: ss(0.68), h: ss(0.58), align: "center",
+      valign: "mid", fontFace: SANS, fontSize: size * 38, bold: true, color, margin: 0 });
+  }
+}
+
 // ============================================================ 1 — TITLE (Palantir grammar: light grotesk, full-bleed object, ledger footer)
 let s = p.addSlide();
 s.background = { color: BLACK };
@@ -169,6 +219,37 @@ roster.forEach((n, i) => {
 });
 s.addText("Every name above signed with a cloud vendor. Every clinic below their size threshold could not — until the tooling became free and local.", {
   x: 7.55, y: 6.5, w: 5.25, h: 0.6, fontFace: SANS, fontSize: 9, italic: true, color: GRAY });
+microFooter(s, false);
+
+// ============================================================ 3c — THE DOCUMENTATION PAIN (light ledger, same grammar as Who)
+s = p.addSlide();
+s.background = { color: LIGHT };
+header(s, 0, false);
+s.addText("The visit ends.\nDocumentation starts.", { x: 0.55, y: 1.0, w: 6.35, h: 1.38,
+  fontFace: SANS, fontSize: 31, bold: true, color: INK, margin: 0 });
+s.addText("The care happens in the room. The burden follows clinicians out of it.", {
+  x: 0.55, y: 2.62, w: 6.1, h: 0.6, fontFace: SANS, fontSize: 14.5, italic: true, color: GRAY, margin: 0 });
+const painFacts = [
+  ["THE DESK TAX", "2 hours of desk + EHR work for every 1 hour of direct patient care.", "Sinsky et al., Annals of Internal Medicine"],
+  ["THE EXODUS", "1 in 5 physicians intend to leave medicine within two years.", "Mayo Clinic Proceedings physician survey"],
+  ["THE PEOPLE", "31M+ patients depend on community health centers running on thin margins.", "HRSA Health Center Program, 2023"],
+];
+let pfy = 3.55;
+painFacts.forEach(f => {
+  s.addShape("rect", { x: 0.55, y: pfy, w: 6.45, h: 0.012, fill: { color: LGRAY } });
+  s.addText(f[0], { x: 0.55, y: pfy + 0.08, w: 1.65, h: 0.55, fontFace: MONO, fontSize: 9,
+    bold: true, color: GRAY });
+  s.addText([{ text: f[1] + "  ", options: { color: INK, fontSize: 10.8 } },
+    { text: f[2], options: { color: GRAY, fontSize: 8.3, italic: true } }], {
+    x: 2.25, y: pfy + 0.08, w: 4.7, h: 0.7, fontFace: SANS, valign: "top", margin: 0 });
+  pfy += 0.98;
+});
+s.addImage({ path: "img_burnout_crop.png", x: 7.55, y: 1.0, w: 5.2, h: 5.9,
+  sizing: { type: "crop", x: 0, y: 0, w: 5.2, h: 5.9 } });
+s.addShape("rect", { x: 7.55, y: 5.63, w: 5.2, h: 1.27,
+  fill: { color: BLACK, transparency: 28 }, line: { color: BLACK, transparency: 100 } });
+s.addText("THE GAP IS NOT A LACK OF AI.\nIT IS A LACK OF ACCESS.", { x: 7.95, y: 5.9, w: 4.25, h: 0.65,
+  fontFace: MONO, fontSize: 10, bold: true, color: WHITE, charSpacing: 0.8, margin: 0 });
 microFooter(s, false);
 
 // ============================================================ 4 — DIVIDER: WHAT IS NEEDED
@@ -345,6 +426,56 @@ s.addText("SHARED SPINE /  structured-JSON output · retry + repair loop · seri
   color: LGRAY, valign: "middle" });
 microFooter(s, true);
 
+// ============================================================ 9c — FOCUSED SCRIBE WORKFLOW (dark capability flow)
+s = p.addSlide();
+s.background = { color: BLACK };
+header(s, 2, true);
+s.addText([
+  { text: "From conversation to ", options: { color: WHITE } },
+  { text: "clinician control", options: { color: MINT } },
+  { text: ".", options: { color: WHITE } },
+], { x: 0.55, y: 0.96, w: 12.2, h: 0.7, fontFace: SEMI, fontSize: 27, margin: 0 });
+s.addText("The focused MVP is one complete, transcript-grounded scribe workflow — not a disconnected feature list.", {
+  x: 0.55, y: 1.76, w: 10.5, h: 0.42, fontFace: SANS, fontSize: 12.5, color: LGRAY, margin: 0 });
+
+const focusedFeatures = [
+  ["01", "capture", "Capture", "Ambient · dictate · pause"],
+  ["02", "upload", "Upload", "Audio · PDF · document"],
+  ["03", "transcribe", "Transcribe", "Whisper + timestamps"],
+  ["04", "structure", "Structure", "Gemma → SOAP / template"],
+  ["05", "review", "Review", "Draft + transcript evidence"],
+  ["06", "control", "Control", "Edit · reprocess · save"],
+];
+const featureStartX = 0.82, featureGapX = 2.12, featureNodeY = 2.73;
+s.addShape("line", { x: 1.22, y: featureNodeY + 0.42, w: 10.88, h: 0,
+  line: { color: "32323A", width: 1.5 } });
+focusedFeatures.forEach((feature, index) => {
+  const [number, kind, title, detail] = feature;
+  const x = featureStartX + index * featureGapX;
+  if (index < focusedFeatures.length - 1) {
+    s.addText("→", { x: x + 1.35, y: featureNodeY + 0.18, w: 0.62, h: 0.46, align: "center",
+      fontFace: SANS, fontSize: 16, bold: true, color: DGRAY, margin: 0 });
+  }
+  s.addText(number, { x: x + 0.02, y: 2.3, w: 0.8, h: 0.24, align: "center",
+    fontFace: MONO, fontSize: 9, bold: true, color: MINT, charSpacing: 1.2, margin: 0 });
+  s.addShape("ellipse", { x, y: featureNodeY, w: 0.84, h: 0.84,
+    fill: { color: PANEL }, line: { color: MINT, width: 1.5 } });
+  featureIcon(s, kind, x + 0.2, featureNodeY + 0.2, 0.44);
+  s.addText(title, { x: x - 0.42, y: 3.77, w: 1.68, h: 0.38, align: "center",
+    fontFace: SEMI, fontSize: 15.5, color: WHITE, margin: 0 });
+  s.addText(detail, { x: x - 0.48, y: 4.24, w: 1.8, h: 0.5, align: "center",
+    fontFace: SANS, fontSize: 9.7, color: GRAY, margin: 0 });
+});
+
+s.addShape("roundRect", { x: 1.7, y: 5.3, w: 9.93, h: 1.02, rectRadius: 0.08,
+  fill: { color: PANEL }, line: { color: "32323A", width: 1 } });
+featureIcon(s, "control", 2.08, 5.54, 0.5, MINT);
+s.addText("Human review is the final step, not a footnote.", { x: 2.85, y: 5.45, w: 5.25, h: 0.34,
+  fontFace: SEMI, fontSize: 15.5, color: WHITE, margin: 0 });
+s.addText("Every SOAP note is labeled an unverified draft until a clinician reviews and edits it.", {
+  x: 2.85, y: 5.82, w: 7.95, h: 0.3, fontFace: SANS, fontSize: 10.8, color: LGRAY, margin: 0 });
+microFooter(s, true);
+
 // ============================================================ 10 — DIVIDER: OBSCURA IN ACTION
 divider("Obscura in Action");
 
@@ -479,5 +610,5 @@ s.addText("OBSCURA   ·   GITHUB.COM/MEETKPATEL/OBSCURA   ·   BUILT ON GEMMA 4 
   color: LGRAY, charSpacing: 1 });
 glyphs(s, true);
 
-p.writeFile({ fileName: process.argv[2] || "20260718_Obscura_Overview_PalantirGrade.pptx" })
+p.writeFile({ fileName: process.argv[2] || "20260718_Obscura_Overview_PalantirGrade_FocusedMVP.pptx" })
   .then(f => console.log("WROTE " + f));
