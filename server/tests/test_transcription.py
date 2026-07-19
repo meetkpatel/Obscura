@@ -97,6 +97,12 @@ def test_detect_audio_format():
     assert filename == "recording.m4a"
     assert content_type == "audio/mp4"
 
+    # Test WebM detection (Chrome MediaRecorder output)
+    webm_data = b"\x1a\x45\xdf\xa3dummy data"
+    filename, content_type = _detect_audio_format(webm_data)
+    assert filename == "recording.webm"
+    assert content_type == "audio/webm"
+
     # Test unrecognized format (should default to WAV)
     unknown_data = b"unknown format data"
     filename, content_type = _detect_audio_format(unknown_data)

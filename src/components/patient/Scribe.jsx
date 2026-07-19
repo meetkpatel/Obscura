@@ -2,6 +2,14 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useTranscription } from "../../utils/hooks/useTranscription";
 import { settingsService } from "../../utils/settings/settingsUtils";
 
+const getPreferredRecordingMimeType = () => {
+    if (typeof MediaRecorder === "undefined") return "";
+
+    return ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(
+        (mimeType) => MediaRecorder.isTypeSupported?.(mimeType),
+    ) || "";
+};
+
 // Hook to manage scribe state and logic
 // This can be used by ScribePillBox to control recording
 export const useScribe = ({
@@ -168,10 +176,16 @@ export const useScribe = ({
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: true,
             });
-            mediaRecorderRef.current = new MediaRecorder(stream);
+            const mimeType = getPreferredRecordingMimeType();
+            mediaRecorderRef.current = new MediaRecorder(
+                stream,
+                mimeType ? { mimeType } : undefined,
+            );
 
             mediaRecorderRef.current.ondataavailable = (event) => {
-                audioChunksRef.current.push(event.data);
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
             };
 
             mediaRecorderRef.current.start();
@@ -207,8 +221,12 @@ export const useScribe = ({
                         ...completeRecordingRef.current,
                         ...audioChunksRef.current,
                     ];
+                    const recordedMimeType =
+                        mediaRecorderRef.current?.mimeType ||
+                        completeRecordingRef.current[0]?.type ||
+                        "audio/webm";
                     const blob = new Blob(completeRecordingRef.current, {
-                        type: "audio/wav",
+                        type: recordedMimeType,
                     });
                     audioChunksRef.current = [];
                     setIsRecording(false);

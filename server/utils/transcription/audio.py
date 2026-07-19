@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -140,25 +141,62 @@ async def _transcribe_external_api(
         if whisper_key:
             headers["Authorization"] = f"Bearer {whisper_key}"
 
-        try:
-            if whisper_base_url.lower().endswith("/v1"):
-                whisper_base_url = whisper_base_url[:-3]
+        if whisper_base_url.lower().endswith("/v1"):
+            whisper_base_url = whisper_base_url[:-3]
 
-            response = await client.post(
-                f"{whisper_base_url}/v1/audio/transcriptions",
-                data=data,
-                files=files,
-                headers=headers,
-            )
-        except httpx.RequestError as e:
-            raise ValueError(f"Transcription failed: {e}") from e
+        response = None
+        last_request_error = None
+        for attempt in range(3):
+            try:
+                response = await client.post(
+                    f"{whisper_base_url}/v1/audio/transcriptions",
+                    data=data,
+                    files=files,
+                    headers=headers,
+                )
+            except httpx.RequestError as error:
+                last_request_error = error
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                raise ValueError(
+                    "Transcription provider is temporarily unreachable. "
+                    "Check the network and retry."
+                ) from error
+
+            if (
+                response.status_code in {408, 429} or response.status_code >= 500
+            ) and attempt < 2:
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            break
+
+        if response is None:
+            raise ValueError(
+                "Transcription provider is temporarily unreachable. Check the network and retry."
+            ) from last_request_error
 
         transcription_end = time.perf_counter()
         transcription_duration = transcription_end - transcription_start
 
         if response.status_code != 200:
-            error_text = response.text
-            raise ValueError(f"Transcription failed: {error_text}")
+            error_text = response.text.strip()
+            try:
+                error_json = response.json()
+                if isinstance(error_json, dict):
+                    error_value = error_json.get("error", error_json.get("detail", ""))
+                    if isinstance(error_value, dict):
+                        error_text = (
+                            str(error_value.get("message", "")).strip() or error_text
+                        )
+                    elif error_value:
+                        error_text = str(error_value).strip()
+            except Exception:
+                pass
+            detail = error_text or "The provider returned an empty error response."
+            raise ValueError(
+                f"Transcription provider returned HTTP {response.status_code}: {detail}"
+            )
 
         try:
             result = response.json()
@@ -221,5 +259,7 @@ def _detect_audio_format(audio_buffer):
         return "recording.flac", "audio/flac"
     elif b"ftyp" in audio_buffer[0:20]:  # M4A/MP4 format
         return "recording.m4a", "audio/mp4"
+    elif audio_buffer.startswith(b"\x1a\x45\xdf\xa3"):
+        return "recording.webm", "audio/webm"
     # Default to WAV if we can't determine
     return "recording.wav", "audio/wav"

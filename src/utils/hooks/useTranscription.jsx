@@ -26,6 +26,18 @@ export const convertAudioToWav = async (audioBlob) => {
     }
 };
 
+const getAudioFilename = (audioBlob) => {
+    const mimeType = (audioBlob?.type || "").toLowerCase();
+    if (mimeType.includes("webm")) return "recording.webm";
+    if (mimeType.includes("mpeg") || mimeType.includes("mp3"))
+        return "recording.mp3";
+    if (mimeType.includes("mp4") || mimeType.includes("m4a"))
+        return "recording.m4a";
+    if (mimeType.includes("ogg")) return "recording.ogg";
+    if (mimeType.includes("flac")) return "recording.flac";
+    return "recording.wav";
+};
+
 export const useTranscription = (onTranscriptionComplete, setLoading) => {
     const [isTranscribing, setIsTranscribing] = useState(false);
     const [transcriptionError, setTranscriptionError] = useState(null);
@@ -40,7 +52,7 @@ export const useTranscription = (onTranscriptionComplete, setLoading) => {
             const wavBlob = await convertAudioToWav(audioBlob);
 
             const formData = new FormData();
-            formData.append("file", wavBlob, "recording.wav");
+            formData.append("file", wavBlob, getAudioFilename(wavBlob));
 
             // Add metadata if provided
             if (metadata.name) formData.append("name", metadata.name);
