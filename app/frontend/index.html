@@ -187,7 +187,17 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
     <div class="spacer"></div>
     <span class="badge" id="egressBadge" onclick="checkEgress()" style="cursor:pointer" title="Click to verify no data left this machine"><span class="dot"></span><span id="egressText">On-device · No network</span></span>
     <span class="pill mono" id="modelPill">gemma4</span>
+    <span class="badge" id="compBtn" onclick="companionPair()" style="cursor:pointer" title="Monitor + dispatch from your phone — direct connection, no cloud">📱 Companion</span>
   </header>
+
+  <!-- Companion pairing (QR is only ever rendered here, on the desktop) -->
+  <div id="compModal" style="display:none;position:fixed;inset:0;z-index:70;background:#070b12cc;backdrop-filter:blur(6px);align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+    <div class="card" style="max-width:430px;text-align:center">
+      <div class="logo" style="font-size:20px;justify-content:center">Pair your <span>phone</span></div>
+      <div id="compBody" class="tag" style="margin:14px 0 0">Loading…</div>
+      <button class="ghost" style="margin-top:16px" onclick="$('#compModal').style.display='none'">Close</button>
+    </div>
+  </div>
 
   <main>
     <!-- REDACT -->
@@ -275,9 +285,13 @@ input[type=text]{background:var(--panel2);border:1px solid var(--line);border-ra
             <div id="findings" style="margin-top:12px"></div>
           </div>
           <div class="col panel">
-            <strong>⚡ Performance &amp; cleanup</strong>
+            <div class="flex" style="justify-content:space-between">
+              <strong>⚡ Performance &amp; cleanup</strong>
+              <button class="ghost" id="optimizeBtn" onclick="reviewOptimize()" style="padding:6px 12px;font-size:13px;display:none">Review &amp; optimize ▸</button>
+            </div>
             <div class="rs" id="perfSummary" style="margin:8px 0"></div>
             <div id="optimizations" style="margin-top:6px"></div>
+            <div class="panel hidden" id="optReview" style="margin-top:12px;background:var(--panel2)"></div>
           </div>
         </div>
       </div>
@@ -426,6 +440,21 @@ function tab(v){ $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.v==
   $$('.view').forEach(x=>x.classList.remove('active')); $('#v-'+v).classList.add('active');
   if(v==='organize' && !orgInit){ orgInit=true; browseTo(''); } }
 function toast(m){ const t=$('#toast'); t.textContent=m; t.style.display='block'; setTimeout(()=>t.style.display='none',3200); }
+
+async function companionPair(){
+  $('#compModal').style.display='flex';
+  const b=$('#compBody');
+  try{
+    const r=await jfetch('/api/companion/info');
+    const url=(r.urls&&r.urls[0])||'';
+    b.innerHTML = (r.qr?`<img src="${r.qr}" alt="pairing QR" style="width:230px;border-radius:12px;background:#fff;padding:8px">`:
+        `<div class="proofbox">Install <code>qrcode</code> (pip) for a scannable code — or type the address below on your phone.</div>`)+
+      (url?`<div class="mono" style="margin-top:12px;font-size:12.5px;word-break:break-all;color:var(--muted)">${url}</div>`:
+        `<div class="proofbox">No LAN address found — is Wi-Fi on? Start the server with <code>--host 0.0.0.0</code>.</div>`)+
+      `<div class="rs" style="margin-top:12px;text-align:left">${r.note}</div>
+       <div class="rs" style="margin-top:8px;text-align:left">🔐 Direct device-to-device. The phone sees job status &amp; counts — never your documents. Token rotates on every restart.</div>`;
+  }catch(e){ b.innerHTML='<div class="proofbox">⚠ '+e.message+'</div>'; }
+}
 // fetch JSON with an explicit long timeout + a human error (no bare "Failed to fetch")
 async function jfetch(url, opts={}, timeoutMs=360000){
   const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(), timeoutMs);
@@ -704,11 +733,45 @@ async function doScan(){
     const gb=(r.reclaimable_mb/1024);
     $('#reclaimVal').innerHTML = r.reclaimable_mb>0? `<b style="color:var(--accent)">${gb>=1?gb.toFixed(1)+' GB':r.reclaimable_mb+' MB'}</b> reclaimable` : 'nothing to reclaim';
     $('#perfSummary').innerHTML = r.perf_summary? `<small class="k">Plan:</small> ${esc(r.perf_summary)}` : '';
-    $('#optimizations').innerHTML = (r.optimizations&&r.optimizations.length)? r.optimizations.map(f=>findingHtml(f,
-      f.reclaimable_mb>50?` <span class="pill" style="color:var(--accent)">${f.reclaimable_mb>=1024?(f.reclaimable_mb/1024).toFixed(1)+' GB':f.reclaimable_mb+' MB'}</span>`:''
-    )).join('') : '<div class="proofbox pass">✓ Clean — nothing to optimize.</div>';
+    $('#optimizations').innerHTML = (r.optimizations&&r.optimizations.length)? r.optimizations.map(f=>{
+      const size=f.reclaimable_mb>50?` <span class="pill" style="color:var(--accent)">${f.reclaimable_mb>=1024?(f.reclaimable_mb/1024).toFixed(1)+' GB':f.reclaimable_mb+' MB'}</span>`:'';
+      const fix=f.action_id?` <label class="rs" style="color:var(--accent)"><input type="checkbox" class="optfix" data-aid="${esc(f.action_id)}" checked> one-click fix</label>`:'';
+      return findingHtml(f, size+fix);
+    }).join('') : '<div class="proofbox pass">✓ Clean — nothing to optimize.</div>';
+    // show the optimize button only if there are runnable one-click fixes
+    const anyFix=(r.optimizations||[]).some(f=>f.action_id);
+    $('#optimizeBtn').style.display = anyFix? '' : 'none';
+    $('#optReview').classList.add('hidden');
   }catch(e){ $('#findings').innerHTML='scan failed: '+e.message; $('#optimizations').innerHTML=''; }
   $('#scanBtn').textContent='Run full scan';
+}
+function selectedFixes(){ return $$('.optfix:checked').map(c=>c.dataset.aid); }
+async function reviewOptimize(){
+  const ids=selectedFixes();
+  if(!ids.length){ toast('select at least one fix'); return; }
+  const rv=$('#optReview'); rv.classList.remove('hidden');
+  rv.innerHTML='<div class="rs"><span class="spin"></span> Gemma is reviewing the plan for reliability…</div>';
+  try{
+    const r=await jfetch('/api/secure/optimize/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action_ids:ids})},60000);
+    const reviews=(r.evaluation.reviews||[]).map(x=>`<div class="rs" style="margin:3px 0">${x.reliable?'✓':'⚠'} <b>${esc(x.action||'')}</b> — ${esc(x.note||'')}</div>`).join('');
+    rv.innerHTML=`<strong>Self-check — Gemma reviewed its own plan</strong>
+      <div style="margin:8px 0">${reviews}</div>
+      <div class="rs" style="margin-bottom:10px"><small class="k">Overall:</small> ${esc(r.evaluation.overall||'')}</div>
+      <div class="proofbox" style="margin-bottom:10px"><small class="k">These are hardcoded, safe Windows cleanups — no registry edits. Each measures the actual space it frees.</small></div>
+      <button onclick='runOptimize(${JSON.stringify(ids)})'>Run ${ids.length} action${ids.length>1?'s':''} now</button>`;
+  }catch(e){ rv.innerHTML='<div class="proofbox">⚠ review failed: '+e.message+'</div>'; }
+}
+async function runOptimize(ids){
+  const rv=$('#optReview');
+  rv.innerHTML='<div class="rs"><span class="spin"></span> Running + measuring…</div>';
+  try{
+    const r=await jfetch('/api/secure/optimize/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action_ids:ids})},180000);
+    const rows=(r.results||[]).map(x=>`<div class="rs" style="margin:3px 0">${x.ok?'✓':'⚠'} <b>${esc(x.label||x.id)}</b> — ${x.ok?(x.disk_freed_mb>0?x.disk_freed_mb+' MB freed':'done'):esc(x.error||'failed')} <small class="k">(${x.seconds}s)</small></div>`).join('');
+    rv.innerHTML=`<div class="proofbox ${r.verified?'pass':''}"><strong>${r.verified?'✓ Optimization complete — self-verified':'⚠ Completed with issues'}</strong>
+      · disk free ${r.disk_free_before_gb} → ${r.disk_free_after_gb} GB</div>
+      <div style="margin-top:10px">${rows}</div>`;
+    toast('Optimized — '+r.total_freed_mb+' MB freed');
+  }catch(e){ rv.innerHTML='<div class="proofbox">⚠ run failed: '+e.message+'</div>'; }
 }
 function sendToRedactor(path){ tab('redact'); toast('Loaded '+path+' into Redactor (demo: drop the file to redact it).'); }
 
